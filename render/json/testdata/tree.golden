@@ -1,0 +1,66 @@
+{
+  "root": "/proj/myproject",
+  "files": [
+    {
+      "path": "models/animal.py",
+      "lang": "python",
+      "symbols": [
+        {
+          "name": "Animal",
+          "kind": "class",
+          "doc": "Base animal.",
+          "file": "models/animal.py",
+          "line": 1,
+          "children": [
+            {
+              "name": "speak",
+              "kind": "method",
+              "detail": "(self)",
+              "file": "models/animal.py",
+              "line": 2
+            }
+          ]
+        },
+        {
+          "name": "Dog",
+          "kind": "class",
+          "detail": "(Animal)",
+          "file": "models/animal.py",
+          "line": 5,
+          "supertypes": [
+            "Animal"
+          ],
+          "children": [
+            {
+              "name": "speak",
+              "kind": "method",
+              "detail": "(self)",
+              "file": "models/animal.py",
+              "line": 6
+            },
+            {
+              "name": "fetch",
+              "kind": "method",
+              "detail": "(self)",
+              "file": "models/animal.py",
+              "line": 9
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "models/zoo.py",
+      "lang": "python",
+      "symbols": [
+        {
+          "name": "make_sound",
+          "kind": "func",
+          "detail": "(a)",
+          "file": "models/zoo.py",
+          "line": 1
+        }
+      ]
+    }
+  ]
+}

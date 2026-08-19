@@ -1,0 +1,10 @@
+myproject/
+└── models/
+    ├── animal.py
+    │   ├── Animal (class)
+    │   │   └── speak(self)
+    │   └── Dog(Animal) (class)
+    │       ├── speak(self)
+    │       └── fetch(self)
+    └── zoo.py
+        └── make_sound(a) (func)

@@ -1,0 +1,11 @@
+# 构建产物
+/ct
+
+# Go
+*.test
+*.out
+
+# 编辑器
+*.swp
+.idea/
+.vscode/
