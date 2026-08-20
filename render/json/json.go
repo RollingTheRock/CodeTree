@@ -44,6 +44,8 @@ type viewSymbol struct {
 	File       string        `json:"file"`
 	Line       int           `json:"line"`
 	SuperTypes []string      `json:"supertypes,omitempty"`
+	Implements []string      `json:"implements,omitempty"`
+	Fields     []core.Field  `json:"fields,omitempty"`
 	Children   []*viewSymbol `json:"children,omitempty"`
 }
 
@@ -68,6 +70,8 @@ func viewSymbols(syms []*core.Symbol, opts Options, depth int) []*viewSymbol {
 		vs := &viewSymbol{
 			Name: s.Name, Kind: s.Kind.String(), Detail: s.Detail,
 			Doc: s.Doc, File: s.File, Line: s.Line, SuperTypes: s.SuperTypes,
+			Implements: s.Implements,
+			Fields:     s.Fields,
 		}
 		if opts.Depth == 0 || depth < opts.Depth {
 			vs.Children = viewSymbols(s.Children, opts, depth+1)

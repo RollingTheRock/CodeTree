@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"codetree/core"
+	"codetree/diagram"
 )
 
 // Render emits a valid Mermaid classDiagram. Classes (and Go structs /
@@ -20,6 +21,8 @@ func Render(p *core.Project) string {
 
 	classes := collectClasses(p)
 	edges := inheritanceEdges(p)
+	implEdges := implementsEdges(p)
+	assocEdges := compositionEdges(p)
 
 	for _, c := range classes {
 		if len(c.methods) == 0 {
@@ -36,10 +39,18 @@ func Render(p *core.Project) string {
 			fmt.Fprintf(&b, "    <<interface>> %s\n", c.name)
 		case core.KindStruct:
 			fmt.Fprintf(&b, "    <<struct>> %s\n", c.name)
+		case core.KindEnum:
+			fmt.Fprintf(&b, "    <<enumeration>> %s\n", c.name)
 		}
 	}
 	for _, e := range edges {
 		fmt.Fprintf(&b, "    %s <|-- %s\n", e.base, e.derived)
+	}
+	for _, e := range implEdges {
+		fmt.Fprintf(&b, "    %s <|.. %s\n", e.base, e.derived)
+	}
+	for _, e := range assocEdges {
+		fmt.Fprintf(&b, "    %s *-- %s\n", e.base, e.derived)
 	}
 	return b.String()
 }
@@ -70,7 +81,7 @@ func collectClasses(p *core.Project) []*classInfo {
 	walk = func(syms []*core.Symbol) {
 		for _, s := range syms {
 			switch s.Kind {
-			case core.KindClass, core.KindStruct, core.KindInterface:
+			case core.KindClass, core.KindStruct, core.KindInterface, core.KindEnum:
 				name := sanitize(s.Name)
 				if !seen[name] {
 					seen[name] = true
@@ -114,6 +125,53 @@ func inheritanceEdges(p *core.Project) []edge {
 	}
 	for _, f := range p.Files {
 		walk(f.Symbols)
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].base != edges[j].base {
+			return edges[i].base < edges[j].base
+		}
+		return edges[i].derived < edges[j].derived
+	})
+	return edges
+}
+
+// compositionEdges derives "Owner *-- Target" edges from field types.
+func compositionEdges(p *core.Project) []edge {
+	var edges []edge
+	seen := map[string]bool{}
+	for _, s := range p.AllSymbols() {
+		for _, f := range s.Fields {
+			for _, ref := range diagram.ExtractTypeRefs(f.Type) {
+				key := sanitize(s.Name) + "|" + sanitize(ref)
+				if sanitize(ref) != sanitize(s.Name) && !seen[key] {
+					seen[key] = true
+					edges = append(edges, edge{base: sanitize(s.Name), derived: sanitize(ref)})
+				}
+			}
+		}
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].base != edges[j].base {
+			return edges[i].base < edges[j].base
+		}
+		return edges[i].derived < edges[j].derived
+	})
+	return edges
+}
+
+// implementsEdges derives "Iface <|.. Class" dashed edges from Implements.
+func implementsEdges(p *core.Project) []edge {
+	var edges []edge
+	seen := map[string]bool{}
+	for _, s := range p.AllSymbols() {
+		for _, iface := range s.Implements {
+			b := sanitize(stripGenerics(iface))
+			key := b + "|" + sanitize(s.Name)
+			if b != sanitize(s.Name) && !seen[key] {
+				seen[key] = true
+				edges = append(edges, edge{base: b, derived: sanitize(s.Name)})
+			}
+		}
 	}
 	sort.Slice(edges, func(i, j int) bool {
 		if edges[i].base != edges[j].base {
