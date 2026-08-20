@@ -55,6 +55,14 @@ func (k Kind) KindLabel() string {
 	}
 }
 
+// Field is a member variable of a class/struct.
+type Field struct {
+	Name     string `json:"name"`
+	Type     string `json:"type,omitempty"`     // from annotation or value inference; may be empty
+	ClassVar bool   `json:"classvar,omitempty"` // Python: class-body attribute vs self.x instance attribute
+	Embedded bool   `json:"embedded,omitempty"` // Go: embedded struct field
+}
+
 // Symbol is a node in the code structure map.
 type Symbol struct {
 	Name     string    `json:"name"`
@@ -65,10 +73,16 @@ type Symbol struct {
 	File     string    `json:"file"`             // path relative to project root
 	Line     int       `json:"line"`             // 1-based
 	Children []*Symbol `json:"children,omitempty"`
+	Fields   []Field   `json:"fields,omitempty"` // class/struct member variables
 
 	// SuperTypes is the text-level base class list in v1 (static analysis).
 	// v2 will fill precise resolved types from LSP.
 	SuperTypes []string `json:"supertypes,omitempty"`
+
+	// Implements lists interfaces this type implements (Java/C#-style).
+	// Distinct from SuperTypes so diagrams can render dashed implements
+	// edges vs solid extends edges. Empty for Python/Go (v2 LSP may fill).
+	Implements []string `json:"implements,omitempty"`
 }
 
 // Label renders one symbol line: "Dog(Animal) (class)", "speak(self)",
@@ -93,6 +107,20 @@ type File struct {
 	Path    string    `json:"path"` // relative to project root
 	Lang    string    `json:"lang"`
 	Symbols []*Symbol `json:"symbols,omitempty"`
+}
+
+// AllSymbols flattens every symbol in the file (depth-first).
+func (f *File) AllSymbols() []*Symbol {
+	var out []*Symbol
+	var walk func(syms []*Symbol)
+	walk = func(syms []*Symbol) {
+		for _, s := range syms {
+			out = append(out, s)
+			walk(s.Children)
+		}
+	}
+	walk(f.Symbols)
+	return out
 }
 
 // Project is the scanned result for a directory tree.
