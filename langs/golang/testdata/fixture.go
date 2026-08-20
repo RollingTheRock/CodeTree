@@ -15,6 +15,12 @@ type Animal struct {
 	Name string
 }
 
+// Dog embeds Animal.
+type Dog struct {
+	Animal
+	Tricks []string
+}
+
 // Speak returns the animal's sound.
 func (a Animal) Speak() string { return "..." }
 

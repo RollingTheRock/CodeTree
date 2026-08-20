@@ -42,10 +42,18 @@ func TestPythonExtraction(t *testing.T) {
 	top := parseFixture(t, false)
 
 	// top-level: classes + functions, variables filtered out
-	wantTop := []string{"Animal", "Dog", "Puppy", "feed", "make_sound", "outer"}
+	wantTop := []string{"Animal", "Dog", "Puppy", "feed", "make_sound", "outer", "Drawable", "Color"}
 	got := names(top)
 	if strings.Join(got, ",") != strings.Join(wantTop, ",") {
 		t.Fatalf("top-level = %v, want %v", got, wantTop)
+	}
+
+	// Protocol/ABC bases classify as interface; Enum bases as enum
+	if d := find(top, "Drawable"); d.Kind != core.KindInterface {
+		t.Errorf("Drawable kind = %v, want interface", d.Kind)
+	}
+	if c := find(top, "Color"); c.Kind != core.KindEnum {
+		t.Errorf("Color kind = %v, want enum", c.Kind)
 	}
 
 	animal := find(top, "Animal")
@@ -123,9 +131,39 @@ func TestPythonIncludeVars(t *testing.T) {
 	}
 }
 
+func TestPythonFields(t *testing.T) {
+	top := parseFixture(t, false)
+	animal := find(top, "Animal")
+
+	fields := map[string]core.Field{}
+	for _, f := range animal.Fields {
+		fields[f.Name] = f
+	}
+	// class attributes
+	if f, ok := fields["kingdom"]; !ok || !f.ClassVar || f.Type != "str" {
+		t.Errorf("kingdom field = %+v", fields["kingdom"])
+	}
+	if f, ok := fields["count"]; !ok || !f.ClassVar || f.Type != "int" {
+		t.Errorf("count field = %+v", fields["count"])
+	}
+	// instance attributes from __init__
+	if f, ok := fields["name"]; !ok || f.ClassVar {
+		t.Errorf("name field = %+v, want instance attr", fields["name"])
+	}
+	if f, ok := fields["legs"]; !ok || f.ClassVar || f.Type != "int" {
+		t.Errorf("legs field = %+v", fields["legs"])
+	}
+	// class-body assignments must not leak into children symbols
+	for _, c := range animal.Children {
+		if c.Name == "kingdom" || c.Name == "count" {
+			t.Errorf("class attr %s leaked into children", c.Name)
+		}
+	}
+}
+
 func TestPythonLineNumbers(t *testing.T) {
 	top := parseFixture(t, false)
-	if find(top, "Animal").Line != 7 {
-		t.Errorf("Animal line = %d, want 7", find(top, "Animal").Line)
+	if find(top, "Animal").Line != 9 {
+		t.Errorf("Animal line = %d, want 9", find(top, "Animal").Line)
 	}
 }

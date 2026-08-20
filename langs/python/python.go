@@ -23,7 +23,16 @@ const querySource = `
   parameters: (parameters) @params) @func
 
 (assignment
-  left: (identifier) @name) @var
+  left: (identifier) @name
+  type: (type)? @var.type
+  right: (_)? @var.value) @var
+
+(assignment
+  left: (attribute
+    object: (identifier) @attr.obj
+    attribute: (identifier) @attr.name)
+  type: (type)? @attr.type
+  right: (_)? @attr.value) @attr
 `
 
 type lang struct{}
@@ -36,6 +45,17 @@ func init() { langs.Register(lang{}) }
 type item struct {
 	node *sitter.Node
 	sym  *core.Symbol
+	typ  string // annotation text (var items only)
+	val  string // value-inferred type (var items only)
+}
+
+// attrItem is a self.x assignment captured for instance-field extraction.
+type attrItem struct {
+	node *sitter.Node // the assignment node
+	obj  string       // receiver name, e.g. "self"
+	name string
+	typ  string
+	val  string
 }
 
 // Parse extracts the symbol tree of one Python source file.
@@ -56,33 +76,63 @@ func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symb
 	qc.Exec(q, root)
 
 	var items []*item
+	var attrs []*attrItem
 	for {
 		m, ok := qc.NextMatch()
 		if !ok {
 			break
 		}
-		var defNode, nameNode, auxNode *sitter.Node
+		var defNode, nameNode, auxNode, typeNode, valNode *sitter.Node
 		var defKind string
+		var attr attrItem
 		for _, c := range m.Captures {
 			capName := q.CaptureNameForId(c.Index)
 			switch capName {
 			case "class", "func", "var":
 				defNode, defKind = c.Node, capName
+			case "attr":
+				defNode, defKind = c.Node, capName
+				attr.node = c.Node
 			case "name":
 				nameNode = c.Node
 			case "bases", "params":
 				auxNode = c.Node
+			case "var.type", "attr.type":
+				typeNode = c.Node
+			case "var.value", "attr.value":
+				valNode = c.Node
+			case "attr.obj":
+				attr.obj = c.Node.Content(src)
+			case "attr.name":
+				attr.name = c.Node.Content(src)
 			}
 		}
-		if defNode == nil || nameNode == nil {
+		if defNode == nil {
+			continue
+		}
+		typ, val := "", ""
+		if typeNode != nil {
+			typ = compactWS(typeNode.Content(src))
+		}
+		if valNode != nil {
+			val = inferType(valNode, src)
+		}
+		if defKind == "attr" {
+			if attr.obj == "self" && attr.name != "" {
+				attr.typ, attr.val = typ, val
+				attrs = append(attrs, &attr)
+			}
+			continue
+		}
+		if nameNode == nil {
 			continue
 		}
 		sym := buildSymbol(defKind, defNode, nameNode, auxNode, src)
 		sym.File = path
-		items = append(items, &item{node: defNode, sym: sym})
+		items = append(items, &item{node: defNode, sym: sym, typ: typ, val: val})
 	}
 
-	return assemble(root, items, src, opts), nil
+	return assemble(root, items, attrs, opts), nil
 }
 
 // nodeKey uniquely identifies a syntax node by its byte range.
@@ -102,6 +152,7 @@ func buildSymbol(kind string, defNode, nameNode, auxNode *sitter.Node, src []byt
 			sym.Detail = compactWS(auxNode.Content(src)) // e.g. "(Animal, Mixin)"
 			sym.SuperTypes = baseNames(auxNode, src)
 		}
+		sym.Kind = classifyClass(sym.SuperTypes)
 		sym.Doc = docstring(defNode, src)
 	case "func":
 		sym.Kind = core.KindFunction // promoted to Method during assembly
@@ -128,40 +179,70 @@ func buildSymbol(kind string, defNode, nameNode, auxNode *sitter.Node, src []byt
 }
 
 // assemble nests items under their nearest enclosing class/function and
-// returns the top-level symbol list.
-func assemble(root *sitter.Node, items []*item, src []byte, opts core.ParseOptions) []*core.Symbol {
+// returns the top-level symbol list. Class-body assignments become Fields;
+// self.x assignments inside __init__ become instance Fields.
+func assemble(root *sitter.Node, items []*item, attrs []*attrItem, opts core.ParseOptions) []*core.Symbol {
 	byKey := map[string]*item{}
 	for _, it := range items {
 		byKey[nodeKey(it.node)] = it
 	}
+	nearest := func(n *sitter.Node) *item {
+		for p := n.Parent(); p != nil; p = p.Parent() {
+			if p == root {
+				return nil
+			}
+			if pi, ok := byKey[nodeKey(p)]; ok {
+				return pi
+			}
+		}
+		return nil
+	}
 
 	var top []*core.Symbol
 	for _, it := range items {
-		// nearest captured ancestor
-		var parent *item
-		for p := it.node.Parent(); p != nil && p != root.Parent(); p = p.Parent() {
-			if p == root {
-				break
-			}
-			if pi, ok := byKey[nodeKey(p)]; ok && (pi.sym.Kind == core.KindClass || pi.sym.Kind == core.KindFunction || pi.sym.Kind == core.KindMethod) {
-				parent = pi
-				break
-			}
-		}
+		parent := nearest(it.node)
 		if parent == nil {
 			top = append(top, it.sym)
 			continue
 		}
 		switch {
-		case parent.sym.Kind == core.KindClass && (it.sym.Kind == core.KindFunction):
+		case parent.sym.Kind == core.KindClass && it.sym.Kind == core.KindFunction:
 			it.sym.Kind = core.KindMethod
 			parent.sym.Children = append(parent.sym.Children, it.sym)
 		case parent.sym.Kind == core.KindClass && it.sym.Kind == core.KindClass:
 			parent.sym.Children = append(parent.sym.Children, it.sym)
-		case parent.sym.Kind == core.KindClass: // var inside class body
-			parent.sym.Children = append(parent.sym.Children, it.sym)
+		case parent.sym.Kind == core.KindClass &&
+			(it.sym.Kind == core.KindVariable || it.sym.Kind == core.KindConstant):
+			// direct class-body assignment → class attribute
+			parent.sym.Fields = append(parent.sym.Fields, core.Field{
+				Name: it.sym.Name, Type: firstNonEmpty(it.typ, it.val), ClassVar: true,
+			})
 		default: // nested function/class inside a function
 			parent.sym.Children = append(parent.sym.Children, it.sym)
+		}
+	}
+
+	// instance attributes: self.x inside __init__ → Field on the owning class
+	for _, a := range attrs {
+		fn := nearest(a.node)
+		if fn == nil || fn.sym.Name != "__init__" {
+			continue
+		}
+		owner := nearest(fn.node)
+		if owner == nil || owner.sym.Kind != core.KindClass {
+			continue
+		}
+		dup := false
+		for _, f := range owner.sym.Fields {
+			if f.Name == a.name {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			owner.sym.Fields = append(owner.sym.Fields, core.Field{
+				Name: a.name, Type: firstNonEmpty(a.typ, a.val),
+			})
 		}
 	}
 
@@ -180,12 +261,62 @@ func assemble(root *sitter.Node, items []*item, src []byte, opts core.ParseOptio
 		}
 		top = filterVars(top)
 	}
-	_ = src
 	return top
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// inferType guesses a Python type from a value expression node.
+func inferType(n *sitter.Node, src []byte) string {
+	switch n.Type() {
+	case "integer":
+		return "int"
+	case "float":
+		return "float"
+	case "string", "concatenated_string":
+		return "str"
+	case "true", "false":
+		return "bool"
+	case "list", "list_comprehension":
+		return "list"
+	case "dictionary", "dictionary_comprehension", "set":
+		return "dict"
+	case "tuple":
+		return "tuple"
+	case "call": // Foo() → Foo
+		if f := n.ChildByFieldName("function"); f != nil {
+			return compactWS(f.Content(src))
+		}
+	case "attribute": // self.x = module.CONST
+		return compactWS(n.Content(src))
+	}
+	return ""
 }
 
 func isConstName(name string) bool {
 	return name == strings.ToUpper(name) && strings.ContainsAny(name, "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+}
+
+// classifyClass refines the class kind from its text-level bases:
+// ABC/Protocol → interface, Enum family → enum, else plain class.
+func classifyClass(bases []string) core.Kind {
+	for _, b := range bases {
+		if i := strings.LastIndex(b, "."); i >= 0 {
+			b = b[i+1:]
+		}
+		switch b {
+		case "ABC", "ABCMeta", "Protocol":
+			return core.KindInterface
+		case "Enum", "IntEnum", "StrEnum", "Flag", "IntFlag":
+			return core.KindEnum
+		}
+	}
+	return core.KindClass
 }
 
 func isAsync(fn *sitter.Node) bool {

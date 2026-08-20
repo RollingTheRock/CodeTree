@@ -80,6 +80,29 @@ func TestGoIncludeVars(t *testing.T) {
 	}
 }
 
+func TestGoStructFields(t *testing.T) {
+	top := parseFixture(t, false)
+
+	an := find(top, "Animal")
+	if len(an.Fields) != 1 || an.Fields[0].Name != "Name" || an.Fields[0].Type != "string" {
+		t.Errorf("Animal fields = %+v", an.Fields)
+	}
+
+	dog := find(top, "Dog")
+	if dog == nil || dog.Kind != core.KindStruct {
+		t.Fatalf("Dog = %+v, want struct", dog)
+	}
+	if len(dog.Fields) != 2 {
+		t.Fatalf("Dog fields = %+v", dog.Fields)
+	}
+	if !dog.Fields[0].Embedded || dog.Fields[0].Name != "Animal" {
+		t.Errorf("embedded field = %+v", dog.Fields[0])
+	}
+	if dog.Fields[1].Name != "Tricks" || dog.Fields[1].Type != "[]string" {
+		t.Errorf("Tricks field = %+v", dog.Fields[1])
+	}
+}
+
 func TestGoKinds(t *testing.T) {
 	top := parseFixture(t, false)
 	var kinds []string

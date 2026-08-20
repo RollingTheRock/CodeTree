@@ -1,3 +1,5 @@
+from enum import Enum
+from typing import Protocol
 """Fixture exercising inheritance, decorators, nesting and async."""
 
 MAX_ANIMALS = 100
@@ -10,8 +12,12 @@ class Animal:
     Second paragraph, not extracted.
     """
 
+    kingdom = "animalia"
+    count: int = 0
+
     def __init__(self, name):
         self.name = name
+        self.legs: int = 4
 
     def speak(self):
         """Make a sound."""
@@ -55,3 +61,12 @@ def outer():
         return 1
 
     return inner()
+
+
+class Drawable(Protocol):
+    def draw(self): ...
+
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2

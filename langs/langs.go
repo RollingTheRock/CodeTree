@@ -58,3 +58,12 @@ func Names() []string {
 	}
 	return out
 }
+
+// Extensions returns every registered file extension (with leading dot).
+func Extensions() map[string]bool {
+	out := make(map[string]bool, len(byExt))
+	for ext := range byExt {
+		out[ext] = true
+	}
+	return out
+}

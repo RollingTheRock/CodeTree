@@ -102,6 +102,7 @@ func typeSymbol(sp *ast.TypeSpec, src []byte, fset *token.FileSet) *core.Symbol 
 	switch t := sp.Type.(type) {
 	case *ast.StructType:
 		sym.Kind = core.KindStruct
+		sym.Fields = structFields(fset, t)
 	case *ast.InterfaceType:
 		sym.Kind = core.KindInterface
 	default:
@@ -109,6 +110,30 @@ func typeSymbol(sp *ast.TypeSpec, src []byte, fset *token.FileSet) *core.Symbol 
 		return nil // type aliases and other decls: out of v1 scope
 	}
 	return sym
+}
+
+// structFields extracts field name+type pairs; embedded fields are marked.
+func structFields(fset *token.FileSet, st *ast.StructType) []core.Field {
+	var out []core.Field
+	for _, f := range st.Fields.List {
+		typ := exprString(fset, f.Type)
+		if len(f.Names) == 0 { // embedded field
+			out = append(out, core.Field{Name: typ, Embedded: true})
+			continue
+		}
+		for _, name := range f.Names {
+			out = append(out, core.Field{Name: name.Name, Type: typ})
+		}
+	}
+	return out
+}
+
+func exprString(fset *token.FileSet, e ast.Expr) string {
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, e); err != nil {
+		return ""
+	}
+	return buf.String()
 }
 
 // funcSignature renders "(a int, b string) error" from a FuncDecl.
