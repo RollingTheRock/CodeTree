@@ -4,8 +4,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"runtime"
 	"strings"
+	"sync"
 
 	ignore "github.com/sabhiram/go-gitignore"
 )
@@ -46,6 +47,12 @@ var defaultSkipDirs = map[string]bool{
 	"dist": true, "build": true, "target": true,
 }
 
+// IsSkippedDir reports whether a directory is always pruned during scans
+// (vendor/, .git/, dot-dirs, …). Shared with the TUI file watcher.
+func IsSkippedDir(name string) bool {
+	return defaultSkipDirs[name] || strings.HasPrefix(name, ".") && name != "."
+}
+
 // Scan walks root, parses every recognized source file and returns the
 // project's symbol map. It honors the root .gitignore and always skips
 // well-known noise directories.
@@ -76,6 +83,9 @@ func Scan(root string, lp LangProvider, opts ScanOptions) (*Project, error) {
 		return proj, nil
 	}
 
+	// Phase 1: collect candidate files (WalkDir order is already lexical,
+	// which keeps output deterministic).
+	var paths []string
 	err = filepath.WalkDir(abs, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -88,7 +98,7 @@ func Scan(root string, lp LangProvider, opts ScanOptions) (*Project, error) {
 			if rel == "." {
 				return nil
 			}
-			if defaultSkipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
+			if IsSkippedDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			if ign != nil && ign.MatchesPath(rel) {
@@ -99,17 +109,61 @@ func Scan(root string, lp LangProvider, opts ScanOptions) (*Project, error) {
 		if ign != nil && ign.MatchesPath(rel) {
 			return nil
 		}
-		if f := scanFile(path, abs, lp, opts); f != nil {
-			proj.Files = append(proj.Files, f)
-		}
+		paths = append(paths, path)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	sort.Slice(proj.Files, func(i, j int) bool { return proj.Files[i].Path < proj.Files[j].Path })
+	// Phase 2: parse. Files are parsed in parallel with one worker per CPU
+	// (each LangParser.Parse call is self-contained — tree-sitter parsers
+	// are created per call and never shared), then merged back in
+	// collection order. Below the threshold, stay sequential.
+	proj.Files = parseFiles(paths, abs, lp, opts)
 	return proj, nil
+}
+
+// parseThreshold: below this many files, parallel parsing isn't worth it.
+const parseThreshold = 8
+
+func parseFiles(paths []string, root string, lp LangProvider, opts ScanOptions) []*File {
+	if len(paths) < parseThreshold {
+		var files []*File
+		for _, p := range paths {
+			if f := scanFile(p, root, lp, opts); f != nil {
+				files = append(files, f)
+			}
+		}
+		return files
+	}
+
+	results := make([]*File, len(paths))
+	var wg sync.WaitGroup
+	jobs := make(chan int, len(paths))
+	workers := runtime.NumCPU()
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				results[i] = scanFile(paths[i], root, lp, opts)
+			}
+		}()
+	}
+	for i := range paths {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	files := make([]*File, 0, len(paths))
+	for _, f := range results {
+		if f != nil {
+			files = append(files, f)
+		}
+	}
+	return files
 }
 
 func scanFile(path, root string, lp LangProvider, opts ScanOptions) *File {
