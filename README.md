@@ -181,7 +181,7 @@ tui/               bubbletea 浏览器（薄壳，只消费 core.Project / diagr
 
 静态扫描打底、LSP 修正与增补：TUI 永远先用静态结果秒开；PATH 里探测到 server 就异步热身，就绪后自动刷新视图；没装 server 就安静保持纯静态，零报错零卡顿。状态栏右侧显示 `lsp warming… / ready / failed`。
 
-默认 server 探测表：python → basedpyright/pyright；go → gopls；cpp → clangd；java → jdtls；rust → rust-analyzer；typescript/javascript → typescript-language-server（`--stdio`，需要 workspace 里有 typescript@5 依赖）。
+默认 server 探测表：python → basedpyright/pyright；go → gopls；cpp → clangd；java → jdtls；rust → rust-analyzer；typescript/javascript → typescript-language-server（`--stdio`，需要 workspace 里有 typescript@5 依赖）。除了 PATH 还会探测知名安装位置（如 `~/.local/share/jdtls`、nvim mason 目录），所以不在 PATH 里的 server 也能用。只有项目里实际存在的语言才会启动对应 server。
 
 修正四类事实：
 
