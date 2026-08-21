@@ -1,3 +1,7 @@
+// Project：CodeTree
+// Author：RollingTheRock
+// Date: 2026.8.21
+
 // Package diagram renders a core.Project's class inheritance forest as a
 // character-canvas UML class diagram. Pure logic: no TUI dependencies.
 //

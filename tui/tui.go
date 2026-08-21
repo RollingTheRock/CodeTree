@@ -1,3 +1,7 @@
+// Project：CodeTree
+// Author：RollingTheRock
+// Date: 2026.8.21
+
 // Package tui is a thin bubbletea browser over core.Project: tree on the
 // left, symbol detail on the right, fuzzy filter, open-in-editor.
 package tui

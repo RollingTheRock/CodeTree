@@ -1,3 +1,7 @@
+// Project：CodeTree
+// Author：RollingTheRock
+// Date: 2026.8.21
+
 package core
 
 import (

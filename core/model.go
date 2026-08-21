@@ -1,3 +1,7 @@
+// Project：CodeTree
+// Author：RollingTheRock
+// Date: 2026.8.21
+
 // Package core defines the language-agnostic symbol model and the project
 // scanner. It contains pure logic only: no rendering, no UI.
 package core

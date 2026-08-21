@@ -1,3 +1,7 @@
+// Project：CodeTree
+// Author：RollingTheRock
+// Date: 2026.8.21
+
 // ct — codetree: a code structure map for the terminal.
 //
 // Bare `ct` on a TTY opens the TUI browser; with arguments or piped stdout
