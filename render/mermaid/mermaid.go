@@ -80,8 +80,7 @@ func collectClasses(p *core.Project) []*classInfo {
 	var walk func(syms []*core.Symbol)
 	walk = func(syms []*core.Symbol) {
 		for _, s := range syms {
-			switch s.Kind {
-			case core.KindClass, core.KindStruct, core.KindInterface, core.KindEnum:
+			if s.Kind.ClassLike() {
 				name := sanitize(s.Name)
 				if !seen[name] {
 					seen[name] = true

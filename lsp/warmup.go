@@ -96,8 +96,6 @@ func Collect(ctx context.Context, root string, proj *core.Project) (Outcome, Cor
 			out.Err = lo.Err
 			continue
 		}
-		anyReady := true
-		_ = anyReady
 		out.Langs = append(out.Langs, lang)
 		out.Requests += lo.Requests
 		if lo.Startup > out.Startup {
@@ -141,7 +139,7 @@ func collectLang(ctx context.Context, root string, proj *core.Project, lang stri
 
 	for _, f := range files {
 		for _, s := range f.AllSymbols() {
-			if !isClassLike(s) {
+			if !s.Kind.ClassLike() {
 				continue
 			}
 			// base disambiguation: definition at each base token
@@ -211,14 +209,6 @@ func filesOfLang(p *core.Project, lang string) []*core.File {
 		out = out[:maxFilesPerPass]
 	}
 	return out
-}
-
-func isClassLike(s *core.Symbol) bool {
-	switch s.Kind {
-	case core.KindClass, core.KindInterface, core.KindStruct, core.KindEnum:
-		return true
-	}
-	return false
 }
 
 // convertSymbols maps LSP DocumentSymbols to core symbols (classes only).

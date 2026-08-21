@@ -36,8 +36,7 @@ func buildGraph(p *core.Project, opts Options) *graph {
 
 	var syms []*core.Symbol
 	for _, s := range p.AllSymbols() {
-		switch s.Kind {
-		case core.KindClass, core.KindStruct, core.KindInterface, core.KindEnum:
+		if s.Kind.ClassLike() {
 			syms = append(syms, s)
 		}
 	}
