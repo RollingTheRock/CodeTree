@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"codetree/lsp"
 )
 
 // ---- status bar styles ----------------------------------------------------
@@ -108,6 +110,14 @@ func (m *model) statusBar() string {
 	right := m.scrollIndicator()
 	if !m.lastReload.IsZero() {
 		right = stBarInfo.Render("↻ "+m.lastReload.Format("15:04:05")+" ") + right
+	}
+	switch m.lspStat {
+	case lsp.StatusWarming:
+		right = stDesc.Render("lsp warming… ") + right
+	case lsp.StatusReady:
+		right = stBarInfo.Render("lsp ready ") + right
+	case lsp.StatusFailed:
+		right = stDesc.Render("lsp failed ") + right
 	}
 	left := badge + " " + renderHints(hints, m.width)
 

@@ -3,6 +3,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 	"codetree/core"
 	"codetree/diagram"
 	"codetree/langs"
+	"codetree/lsp"
 )
 
 // ---- node tree ------------------------------------------------------------
@@ -135,6 +137,10 @@ type model struct {
 	lastReload time.Time
 	scanOpts   core.ScanOptions
 
+	// LSP semantic layer (optional, async): corrections are collected in a
+	// goroutine and applied on the main loop, then views rebuild
+	lspStat lsp.Status
+
 	treeVP    viewport.Model
 	filter    textinput.Model
 	filtering bool // tree mode only; picker's filter is always live
@@ -173,6 +179,7 @@ func newModel(p *core.Project) model {
 	m := model{
 		root: buildTree(p), projRoot: p.Root, proj: p, filter: ti, dopts: dopts,
 		mode: modePicker, pickerFiles: pickerEntries(p), marked: map[string]bool{},
+		lspStat: lsp.StatusWarming, // Init's warm pass decides the real status
 	}
 	m.reflow()
 	return m
@@ -254,6 +261,14 @@ func visibleUnder(n *node, query string) bool {
 // reloadedMsg signals a debounced project file change.
 type reloadedMsg struct{}
 
+// lspMsg carries one LSP pass's collected corrections to the main loop.
+type lspMsg struct {
+	out    lsp.Outcome
+	bases  []lsp.BaseBinding
+	fields []lsp.FieldType
+	added  []*core.Symbol
+}
+
 // waitForChange blocks until the watcher fires; nil channel = never fires.
 func waitForChange(ch chan struct{}) tea.Cmd {
 	if ch == nil {
@@ -265,7 +280,20 @@ func waitForChange(ch chan struct{}) tea.Cmd {
 	}
 }
 
-func (m model) Init() tea.Cmd { return waitForChange(m.watchCh) }
+// warmLSP runs an LSP pass off the main loop. proj is only read here; the
+// corrections are applied when the returned message is handled.
+func warmLSP(root string, proj *core.Project) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		out, bases, fields, added := lsp.Collect(ctx, root, proj)
+		return lspMsg{out, bases, fields, added}
+	}
+}
+
+func (m model) Init() tea.Cmd {
+	return tea.Batch(waitForChange(m.watchCh), warmLSP(m.projRoot, m.proj))
+}
 
 // reload rescans the project and rebuilds all views, preserving UI state:
 // marks (pruned of deleted files), scope, focus, selection, scroll offset.
@@ -325,7 +353,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case reloadedMsg:
 		m.reload()
-		return m, waitForChange(m.watchCh) // re-arm
+		// rescan dropped the LSP corrections — warm again in the background
+		m.lspStat = lsp.StatusWarming
+		return m, tea.Batch(waitForChange(m.watchCh), warmLSP(m.projRoot, m.proj))
+
+	case lspMsg:
+		m.lspStat = msg.out.Status
+		if msg.out.Status == lsp.StatusReady {
+			lsp.Apply(m.proj, msg.bases, msg.fields, msg.added)
+			m.root = buildTree(m.proj)
+			m.reflow()
+			m.pickerFiles = pickerEntries(m.proj)
+			if m.diag != nil {
+				m.rebuildDiagram()
+			}
+		}
+		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
