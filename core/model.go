@@ -44,6 +44,16 @@ func (k Kind) String() string {
 	}
 }
 
+// ClassLike reports whether the kind is a type declaration: class, struct,
+// interface or enum.
+func (k Kind) ClassLike() bool {
+	switch k {
+	case KindClass, KindStruct, KindInterface, KindEnum:
+		return true
+	}
+	return false
+}
+
 // KindLabel returns the short suffix shown after a symbol in text output,
 // e.g. "Animal (class)". Methods and variables render bare.
 func (k Kind) KindLabel() string {
