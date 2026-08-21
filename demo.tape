@@ -1,4 +1,4 @@
-# CodeTree demo: picker → mark files → class diagram → navigate → members → focus
+# CodeTree demo: picker → mark files → class diagram → navigate → members
 Output demo.gif
 
 Set Shell "bash"
@@ -12,7 +12,7 @@ Set Theme "Catppuccin Mocha"
 Type "cd ~/dev/ct-samples/pyml"
 Enter
 Sleep 300ms
-Type "env -u NO_COLOR ~/dev/oopgraph/ct"
+Type "ct"
 Enter
 Sleep 3s
 
@@ -34,10 +34,5 @@ Sleep 900ms
 Type "m"
 Sleep 1200ms
 
-# neighborhood focus, then back out
-Enter
-Sleep 1300ms
-Escape
-Sleep 700ms
 Type "q"
 Sleep 500ms
