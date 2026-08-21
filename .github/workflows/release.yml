@@ -28,7 +28,7 @@ jobs:
           - { os: ubuntu-latest, target: linux-amd64,  goos: linux,  goarch: amd64 }
           - { os: ubuntu-latest, target: linux-arm64,  goos: linux,  goarch: arm64, cc: aarch64-linux-gnu-gcc }
           - { os: macos-latest,  target: darwin-arm64, goos: darwin, goarch: arm64 }
-          - { os: macos-13,      target: darwin-amd64, goos: darwin, goarch: amd64 }
+          - { os: macos-latest,  target: darwin-amd64, goos: darwin, goarch: amd64 } # clang multiarch cross
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
