@@ -187,6 +187,7 @@ func (g *graph) computeForest() {
 		}
 		seen[n] = true
 		related := len(n.children) > 0 || len(n.implementors) > 0 ||
+			len(n.implNodes) > 0 || // outgoing implements edges also promote
 			len(n.assocTargets) > 0 || len(n.assocFrom) > 0
 		if !related {
 			if !n.external {
