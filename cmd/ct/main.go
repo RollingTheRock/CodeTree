@@ -5,10 +5,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/term"
 
@@ -19,6 +21,7 @@ import (
 	_ "codetree/langs/golang"
 	_ "codetree/langs/java"
 	_ "codetree/langs/python"
+	"codetree/lsp"
 	"codetree/render/json"
 	"codetree/render/mermaid"
 	"codetree/render/text"
@@ -38,6 +41,7 @@ func main() {
 		siblings bool
 		external bool
 		assoc    bool
+		useLSP   bool
 	)
 	flag.BoolVar(&all, "a", false, "show all symbols including variables/constants")
 	flag.BoolVar(&all, "all", false, "show all symbols including variables/constants")
@@ -54,6 +58,7 @@ func main() {
 	flag.BoolVar(&siblings, "siblings", false, "diagram: include focus class's siblings")
 	flag.BoolVar(&external, "external", true, "diagram: show unresolved bases as gray boxes")
 	flag.BoolVar(&assoc, "assoc", true, "diagram: draw composition edges from field types (◆)")
+	flag.BoolVar(&useLSP, "lsp", false, "run the LSP semantic pass (python): print corrections to stderr, then render the corrected model")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "ct — code structure map for the terminal\n\nusage: ct [flags] [path]\n\n")
 		flag.PrintDefaults()
@@ -114,6 +119,23 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ct:", err)
 		os.Exit(1)
+	}
+
+	// LSP semantic pass (opt-in for CLI): corrections printed as a diff.
+	if useLSP {
+		abs, _ := filepath.Abs(path)
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		out := lsp.Warm(ctx, abs, proj)
+		fmt.Fprintf(os.Stderr, "ct: lsp %s", out.Status)
+		if out.Status == lsp.StatusReady {
+			fmt.Fprintf(os.Stderr, " (startup %s, %d requests)", out.Startup.Round(time.Millisecond), out.Requests)
+		}
+		if out.Err != nil {
+			fmt.Fprintf(os.Stderr, " (error: %v)", out.Err)
+		}
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprint(os.Stderr, out.Diff.String())
 	}
 
 	var out string
