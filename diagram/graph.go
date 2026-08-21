@@ -1,6 +1,7 @@
 package diagram
 
 import (
+	"strconv"
 	"strings"
 
 	"codetree/core"
@@ -28,7 +29,8 @@ type gnode struct {
 }
 
 // buildGraph extracts the inheritance forest from all class-like symbols.
-// Duplicate class names: first occurrence (scan order) wins.
+// Duplicate class names coexist as separate nodes; name-based base matching
+// binds to the first occurrence, LSP BaseRefs bind to the exact node.
 func buildGraph(p *core.Project, opts Options) *graph {
 	g := &graph{byName: map[string]*gnode{}}
 
@@ -40,14 +42,23 @@ func buildGraph(p *core.Project, opts Options) *graph {
 		}
 	}
 	for _, s := range syms {
+		n := &gnode{name: s.Name, sym: s}
+		// duplicate class names all become nodes (they are distinct
+		// classes); byName keeps the first occurrence for name-based
+		// fallback, precise LSP bindings go through byPos instead
 		if _, dup := g.byName[s.Name]; !dup {
-			n := &gnode{name: s.Name, sym: s}
 			g.byName[s.Name] = n
-			g.nodes = append(g.nodes, n)
 		}
+		g.nodes = append(g.nodes, n)
 	}
 
 	// resolve bases
+	byPos := map[string]*gnode{} // "file:line" → node, for LSP-precise bindings
+	for _, n := range g.nodes {
+		if n.sym != nil && n.sym.File != "" && n.sym.Line > 0 {
+			byPos[n.sym.File+":"+strconv.Itoa(n.sym.Line)] = n
+		}
+	}
 	externals := map[string]*gnode{}
 	var extOrder []string // first-seen order; map iteration is randomized
 	newExternal := func(name string) *gnode {
@@ -60,9 +71,20 @@ func buildGraph(p *core.Project, opts Options) *graph {
 		return en
 	}
 	for _, n := range g.nodes {
-		for _, base := range n.sym.SuperTypes {
+		for i, base := range n.sym.SuperTypes {
 			name := baseKey(base)
 			if name == "" || name == n.name {
+				continue
+			}
+			// LSP-precise binding (file:line) wins over name matching;
+			// a ref outside the project stays an external box
+			if i < len(n.sym.BaseRefs) && n.sym.BaseRefs[i].File != "" {
+				ref := n.sym.BaseRefs[i]
+				if bn, ok := byPos[ref.File+":"+strconv.Itoa(ref.Line)]; ok && bn != n {
+					n.baseNodes = append(n.baseNodes, bn)
+				} else {
+					n.extBases = append(n.extBases, name)
+				}
 				continue
 			}
 			if bn, ok := g.byName[name]; ok {

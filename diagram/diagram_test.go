@@ -361,3 +361,72 @@ func TestFocusNotFound(t *testing.T) {
 	}
 	_ = nf
 }
+
+// TestBaseRefsDisambiguate: two files each define Base; name matching alone
+// picks the first-seen one, an LSP BaseRefs binding must win.
+func TestBaseRefsDisambiguate(t *testing.T) {
+	mk := func(withRefs bool) *core.Project {
+		a := &core.Symbol{Name: "A", Kind: core.KindClass, File: "m2.py", Line: 5,
+			SuperTypes: []string{"Base"}}
+		if withRefs {
+			a.BaseRefs = []core.Ref{{File: "m2.py", Line: 1}}
+		}
+		return &core.Project{Root: "/p", Files: []*core.File{
+			{Path: "m1.py", Lang: "python", Symbols: []*core.Symbol{
+				{Name: "Base", Kind: core.KindClass, File: "m1.py", Line: 1}}},
+			{Path: "m2.py", Lang: "python", Symbols: []*core.Symbol{
+				{Name: "Base", Kind: core.KindClass, File: "m2.py", Line: 1}, a}},
+		}}
+	}
+	parentFile := func(p *core.Project) string {
+		d, err := diagram.Build(p, diagram.DefaultOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, n := range d.Nodes {
+			if n.Name == "A" {
+				if n.Parent < 0 {
+					t.Fatalf("A has no parent; nodes: %v", d.Nodes)
+				}
+				_ = i
+				return d.Nodes[n.Parent].Sym.File
+			}
+		}
+		t.Fatal("A not found")
+		return ""
+	}
+	if got := parentFile(mk(false)); got != "m1.py" {
+		t.Errorf("name-only match parent = %s, want m1.py (first-seen)", got)
+	}
+	if got := parentFile(mk(true)); got != "m2.py" {
+		t.Errorf("BaseRefs-bound parent = %s, want m2.py (LSP wins)", got)
+	}
+}
+
+// TestBaseRefsOutsideProject: an LSP ref pointing outside the project
+// (typeshed etc.) keeps the base as an external box, not a wrong link.
+func TestBaseRefsOutsideProject(t *testing.T) {
+	a := &core.Symbol{Name: "A", Kind: core.KindClass, File: "a.py", Line: 3,
+		SuperTypes: []string{"Base"},
+		BaseRefs:   []core.Ref{{File: "../typeshed/stdlib/base.pyi", Line: 10}}}
+	p := &core.Project{Root: "/p", Files: []*core.File{
+		{Path: "a.py", Lang: "python", Symbols: []*core.Symbol{
+			{Name: "Base", Kind: core.KindClass, File: "a.py", Line: 1}, a}},
+	}}
+	d, err := diagram.Build(p, diagram.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range d.Nodes {
+		if n.Name == "A" {
+			// gray external box: External, Sym nil, and NOT the in-project
+			// same-name Base that plain name matching would have picked
+			if n.Parent < 0 || !d.Nodes[n.Parent].External {
+				t.Errorf("A's parent should be the gray external Base box, got %+v",
+					d.Nodes[n.Parent])
+			}
+			return
+		}
+	}
+	t.Fatal("A not found")
+}
