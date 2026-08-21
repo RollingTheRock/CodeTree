@@ -34,22 +34,25 @@ func (s Status) String() string {
 
 // Outcome is the result of one LSP pass over the project.
 type Outcome struct {
-	Status    Status
-	Diff      Diff
-	Startup   time.Duration // initialize handshake latency
-	Requests  int           // definition+hover+documentSymbol requests made
-	Err       error         // non-nil when Status == StatusFailed
+	Status   Status
+	Diff     Diff
+	Startup  time.Duration // slowest server handshake
+	Requests int           // definition+hover+documentSymbol+implementation requests made
+	Langs    []string      // languages whose server became ready
+	Err      error         // non-nil when Status == StatusFailed
 }
 
-// maxFilesPerPass caps per-file work so huge projects stay snappy; the pass
-// covers the files with the most class symbols first.
+// maxFilesPerPass caps per-language file work so huge projects stay snappy.
 const maxFilesPerPass = 200
+
+// langOrder is the deterministic processing order for Collect.
+var langOrder = []string{"python", "go", "cpp", "java", "rust", "typescript", "javascript"}
 
 // test seams: the server probe and client factory are replaceable.
 var (
 	resolveServerFn = ResolveServer
-	starter         = func(ctx context.Context, cfg ServerConfig, root string) (*Client, error) {
-		return Start(ctx, cfg, root)
+	starter         = func(ctx context.Context, cfg ServerConfig, root, langKey string) (*Client, error) {
+		return Start(ctx, cfg, root, langKey)
 	}
 )
 
@@ -57,41 +60,84 @@ var (
 // place. CLI use. The TUI uses Collect instead and applies on its own
 // goroutine (the bubbletea main loop) to avoid racing the renderer.
 func Warm(ctx context.Context, root string, proj *core.Project) Outcome {
-	out, bases, fields, added := Collect(ctx, root, proj)
+	out, corr := Collect(ctx, root, proj)
 	if out.Status == StatusReady {
-		out.Diff = Apply(proj, bases, fields, added)
+		out.Diff = Apply(proj, corr)
 	}
 	return out
 }
 
-// Collect gathers LSP corrections without touching proj: probe server →
-// handshake → didOpen + definition (base disambiguation) + hover (field
-// types) + documentSymbol (class augmentation). proj is only read.
-//
-// serverURI/ports: none — stdio only.
-func Collect(ctx context.Context, root string, proj *core.Project) (Outcome, []BaseBinding, []FieldType, []*core.Symbol) {
-	cfg, ok := resolveServerFn("python")
-	if !ok {
-		return Outcome{Status: StatusAbsent}, nil, nil, nil
+// Collect gathers LSP corrections without touching proj. For each language
+// present in the project that has a resolvable server, it starts one client
+// and runs: definition (base disambiguation) + hover (field types) +
+// documentSymbol (class augmentation) + implementation (Go interfaces).
+// proj is only read.
+func Collect(ctx context.Context, root string, proj *core.Project) (Outcome, Corrections) {
+	var out Outcome
+	var corr Corrections
+
+	present := map[string]bool{}
+	for _, f := range proj.Files {
+		present[f.Lang] = true
 	}
-	files := pythonFiles(proj)
+
+	anyFound := false
+	for _, lang := range langOrder {
+		if !present[lang] {
+			continue
+		}
+		cfg, ok := resolveServerFn(lang)
+		if !ok {
+			continue
+		}
+		anyFound = true
+		lo, lc := collectLang(ctx, root, proj, lang, cfg)
+		if lo.Err != nil {
+			out.Err = lo.Err
+			continue
+		}
+		anyReady := true
+		_ = anyReady
+		out.Langs = append(out.Langs, lang)
+		out.Requests += lo.Requests
+		if lo.Startup > out.Startup {
+			out.Startup = lo.Startup
+		}
+		corr.Bases = append(corr.Bases, lc.Bases...)
+		corr.Fields = append(corr.Fields, lc.Fields...)
+		corr.Impls = append(corr.Impls, lc.Impls...)
+		corr.Added = append(corr.Added, lc.Added...)
+	}
+
+	switch {
+	case len(out.Langs) > 0:
+		out.Status = StatusReady
+	case anyFound:
+		out.Status = StatusFailed
+	default:
+		out.Status = StatusAbsent
+	}
+	return out, corr
+}
+
+// collectLang runs one language's pass with its own client.
+func collectLang(ctx context.Context, root string, proj *core.Project, lang string, cfg ServerConfig) (Outcome, Corrections) {
+	var out Outcome
+	var corr Corrections
+
+	files := filesOfLang(proj, lang)
 	if len(files) == 0 {
-		return Outcome{Status: StatusAbsent}, nil, nil, nil
+		return out, corr
 	}
 
 	t0 := time.Now()
-	client, err := starter(ctx, cfg, root)
+	client, err := starter(ctx, cfg, root, lang)
 	if err != nil {
-		return Outcome{Status: StatusFailed, Err: err}, nil, nil, nil
+		out.Err = err
+		return out, corr
 	}
 	defer client.Shutdown(ctx)
-	startup := time.Since(t0)
-
-	out := Outcome{Status: StatusReady, Startup: startup}
-
-	var bases []BaseBinding
-	var fields []FieldType
-	var added []*core.Symbol
+	out.Startup = time.Since(t0)
 
 	for _, f := range files {
 		for _, s := range f.AllSymbols() {
@@ -103,14 +149,13 @@ func Collect(ctx context.Context, root string, proj *core.Project) (Outcome, []B
 				if i >= len(s.BasePos) {
 					break
 				}
-				pos := s.BasePos[i]
-				locs, err := client.Definition(ctx, f.Path, pos)
+				locs, err := client.Definition(ctx, f.Path, s.BasePos[i])
 				out.Requests++
 				if err != nil || len(locs) == 0 {
 					continue
 				}
 				loc := locs[0]
-				bases = append(bases, BaseBinding{
+				corr.Bases = append(corr.Bases, BaseBinding{
 					File: f.Path, ClassLine: s.Line, BaseIndex: i,
 					TargetFile: URIToRel(root, loc.URI),
 					TargetLine: int(loc.Range.Start.Line) + 1,
@@ -126,7 +171,22 @@ func Collect(ctx context.Context, root string, proj *core.Project) (Outcome, []B
 				if err != nil || typ == "" {
 					continue
 				}
-				fields = append(fields, FieldType{File: f.Path, Line: fld.Line, Col: fld.Col, Type: typ})
+				corr.Fields = append(corr.Fields, FieldType{File: f.Path, Line: fld.Line, Col: fld.Col, Type: typ})
+			}
+			// Go: interface implementations
+			if lang == "go" && s.Kind == core.KindInterface && s.Line > 0 {
+				locs, err := client.Implementation(ctx, f.Path, core.Pos{Line: s.Line, Col: s.Col})
+				out.Requests++
+				if err != nil {
+					continue
+				}
+				for _, loc := range locs {
+					corr.Impls = append(corr.Impls, ImplBinding{
+						InterfaceFile: f.Path, InterfaceLine: s.Line,
+						ImplFile: URIToRel(root, loc.URI),
+						ImplLine: int(loc.Range.Start.Line) + 1,
+					})
+				}
 			}
 		}
 		// class augmentation: documentSymbol catches dynamic class assignments
@@ -135,16 +195,15 @@ func Collect(ctx context.Context, root string, proj *core.Project) (Outcome, []B
 		if err != nil {
 			continue
 		}
-		added = append(added, convertSymbols(f.Path, syms)...)
+		corr.Added = append(corr.Added, convertSymbols(f.Path, syms)...)
 	}
-
-	return out, bases, fields, added
+	return out, corr
 }
 
-func pythonFiles(p *core.Project) []*core.File {
+func filesOfLang(p *core.Project, lang string) []*core.File {
 	var out []*core.File
 	for _, f := range p.Files {
-		if f.Lang == "python" {
+		if f.Lang == lang {
 			out = append(out, f)
 		}
 	}

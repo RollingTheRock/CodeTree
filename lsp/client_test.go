@@ -173,3 +173,45 @@ func TestClientDidOpenOnce(t *testing.T) {
 	// opened-set guard is covered by reading the code path once.
 	_ = didOpens
 }
+
+func TestClientImplementation(t *testing.T) {
+	root := t.TempDir()
+	writeSource(t, root, "shape.go", "package shape\n\ntype Speaker interface{}\n\ntype Dog struct{}\n")
+	target := uri.File(filepath.Join(root, "shape.go"))
+
+	c := newTestClient(t, root, func(method string, params jsonrpc2.RawMessage) any {
+		switch method {
+		case "initialize":
+			return protocol.InitializeResult{}
+		case "textDocument/implementation":
+			return protocol.LocationSlice{{
+				URI:   target,
+				Range: protocol.Range{Start: protocol.Position{Line: 4, Character: 5}},
+			}}
+		}
+		return nil
+	})
+
+	locs, err := c.Implementation(context.Background(), "shape.go", core.Pos{Line: 3, Col: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locs) != 1 || int(locs[0].Range.Start.Line) != 4 {
+		t.Fatalf("locs = %+v", locs)
+	}
+}
+
+func TestLangIDForFile(t *testing.T) {
+	c := &Client{langKey: "typescript"}
+	cases := map[string]string{
+		"a.py": "python", "b.go": "go", "c.cc": "cpp", "d.hpp": "cpp",
+		"e.java": "java", "f.rs": "rust", "g.ts": "typescript",
+		"h.tsx": "typescriptreact", "i.js": "javascript", "j.jsx": "javascriptreact",
+		"k.unknown": "typescript", // falls back to client langKey
+	}
+	for f, want := range cases {
+		if got := c.langID(f); got != want {
+			t.Errorf("langID(%s) = %s, want %s", f, got, want)
+		}
+	}
+}

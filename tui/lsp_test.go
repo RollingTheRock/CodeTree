@@ -26,8 +26,8 @@ func TestLSPMsgAppliesCorrections(t *testing.T) {
 
 	added := &core.Symbol{Name: "Color", Kind: core.KindEnum, File: "a.py", Line: 40, Source: "lsp"}
 	mm, _ := m.Update(lspMsg{
-		out:   lsp.Outcome{Status: lsp.StatusReady},
-		added: []*core.Symbol{added},
+		out:  lsp.Outcome{Status: lsp.StatusReady},
+		corr: lsp.Corrections{Added: []*core.Symbol{added}},
 	})
 	m = mm.(model)
 

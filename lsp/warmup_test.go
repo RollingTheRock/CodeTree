@@ -37,14 +37,14 @@ func TestWarmEndToEnd(t *testing.T) {
 	oldResolve, oldStarter := resolveServerFn, starter
 	defer func() { resolveServerFn, starter = oldResolve, oldStarter }()
 	resolveServerFn = func(lang string) (ServerConfig, bool) { return ServerConfig{Command: "fake"}, true }
-	starter = func(ctx context.Context, cfg ServerConfig, r string) (*Client, error) {
+	starter = func(ctx context.Context, cfg ServerConfig, r, langKey string) (*Client, error) {
 		stream := fakeServer(t, func(method string, params jsonrpc2.RawMessage) any {
 			switch method {
 			case "initialize":
 				return protocol.InitializeResult{}
 			case "textDocument/definition":
 				return protocol.LocationSlice{{
-					URI: baseURI,
+					URI:   baseURI,
 					Range: protocol.Range{Start: protocol.Position{Line: 2, Character: 6}},
 				}}
 			case "textDocument/hover":
@@ -137,5 +137,77 @@ func TestResolveServer(t *testing.T) {
 	// unknown language → absent
 	if _, ok := resolveServer("cobol", fileConfig{}); ok {
 		t.Error("cobol should be absent")
+	}
+}
+
+// TestCollectMultiLang: python+go project, two fake servers, corrections merge.
+func TestCollectMultiLang(t *testing.T) {
+	root := t.TempDir()
+	writeSource(t, root, "a.py", "class A: pass\n")
+	writeSource(t, root, "s.go", "package s\n\ntype Speaker interface{}\n\ntype Dog struct{}\n")
+
+	proj := &core.Project{
+		Root: root,
+		Files: []*core.File{
+			{Path: "a.py", Lang: "python", Symbols: []*core.Symbol{
+				{Name: "A", Kind: core.KindClass, File: "a.py", Line: 1},
+			}},
+			{Path: "s.go", Lang: "go", Symbols: []*core.Symbol{
+				{Name: "Speaker", Kind: core.KindInterface, File: "s.go", Line: 3, Col: 5},
+				{Name: "Dog", Kind: core.KindStruct, File: "s.go", Line: 5, Col: 5},
+			}},
+		},
+	}
+
+	goURI := uri.File(root + "/s.go")
+	oldResolve, oldStarter := resolveServerFn, starter
+	defer func() { resolveServerFn, starter = oldResolve, oldStarter }()
+	resolveServerFn = func(lang string) (ServerConfig, bool) { return ServerConfig{Command: "fake-" + lang}, true }
+	starter = func(ctx context.Context, cfg ServerConfig, r, langKey string) (*Client, error) {
+		stream := fakeServer(t, func(method string, params jsonrpc2.RawMessage) any {
+			switch {
+			case method == "initialize":
+				return protocol.InitializeResult{}
+			case method == "textDocument/implementation" && langKey == "go":
+				return protocol.LocationSlice{{
+					URI:   goURI,
+					Range: protocol.Range{Start: protocol.Position{Line: 4, Character: 5}},
+				}}
+			case method == "textDocument/documentSymbol":
+				return protocol.DocumentSymbolSlice{}
+			}
+			return nil
+		})
+		return newClient(ctx, stream, r)
+	}
+
+	out, corr := Collect(context.Background(), root, proj)
+	if out.Status != StatusReady {
+		t.Fatalf("status = %v err = %v", out.Status, out.Err)
+	}
+	if len(out.Langs) != 2 {
+		t.Errorf("langs = %v, want [python go]", out.Langs)
+	}
+	if len(corr.Impls) != 1 || corr.Impls[0].ImplLine != 5 {
+		t.Fatalf("impls = %+v", corr.Impls)
+	}
+	d := Apply(proj, corr)
+	if len(d.AddedImpls) != 1 {
+		t.Errorf("diff = %v", d)
+	}
+	if got := proj.Files[1].Symbols[1].Implements; len(got) != 1 || got[0] != "Speaker" {
+		t.Errorf("Dog.Implements = %v", got)
+	}
+}
+
+// TestCollectAbsentWhenNoServer: language present but server missing → absent.
+func TestCollectAbsentWhenNoServer(t *testing.T) {
+	old := resolveServerFn
+	defer func() { resolveServerFn = old }()
+	resolveServerFn = func(lang string) (ServerConfig, bool) { return ServerConfig{}, false }
+	proj := &core.Project{Root: "/p", Files: []*core.File{{Path: "a.go", Lang: "go"}}}
+	out, _ := Collect(context.Background(), t.TempDir(), proj)
+	if out.Status != StatusAbsent {
+		t.Errorf("status = %v", out.Status)
 	}
 }

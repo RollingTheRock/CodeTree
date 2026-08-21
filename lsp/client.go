@@ -17,13 +17,33 @@ import (
 	"codetree/core"
 )
 
-// Client is a minimal LSP client over stdio. One client per project scan.
+// Client is a minimal LSP client over stdio. One client per language pass.
 type Client struct {
-	conn   jsonrpc2.Conn
-	srv    protocol.Server
-	cmd    *exec.Cmd // nil for injected transports (tests)
-	root   string    // absolute project root
-	opened map[string]bool
+	conn    jsonrpc2.Conn
+	srv     protocol.Server
+	cmd     *exec.Cmd // nil for injected transports (tests)
+	root    string    // absolute project root
+	langKey string    // "python"/"go"/... — fallback languageID
+	opened  map[string]bool
+}
+
+// langIDByExt maps file extensions to LSP language identifiers.
+var langIDByExt = map[string]string{
+	".py": "python", ".pyi": "python",
+	".go": "go",
+	".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp",
+	".h": "cpp", ".hpp": "cpp", ".hxx": "cpp",
+	".java": "java",
+	".rs":   "rust",
+	".ts":   "typescript", ".tsx": "typescriptreact",
+	".js": "javascript", ".jsx": "javascriptreact",
+}
+
+func (c *Client) langID(rel string) string {
+	if id, ok := langIDByExt[strings.ToLower(filepath.Ext(rel))]; ok {
+		return id
+	}
+	return c.langKey
 }
 
 // stdioRWC joins the server's stdout (read) and stdin (write).
@@ -36,7 +56,7 @@ type stdioRWC struct {
 func (s *stdioRWC) Close() error { return s.closer() }
 
 // Start launches the server process and performs the LSP handshake.
-func Start(ctx context.Context, cfg ServerConfig, root string) (*Client, error) {
+func Start(ctx context.Context, cfg ServerConfig, root, langKey string) (*Client, error) {
 	cmd := exec.Command(cfg.Command, cfg.Args...)
 	cmd.Dir = root
 	stdin, err := cmd.StdinPipe()
@@ -61,6 +81,7 @@ func Start(ctx context.Context, cfg ServerConfig, root string) (*Client, error) 
 		return nil, err
 	}
 	c.cmd = cmd
+	c.langKey = langKey
 	return c, nil
 }
 
@@ -114,7 +135,7 @@ func (c *Client) openDoc(ctx context.Context, rel string) error {
 	return c.srv.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{
 			URI:        uri.File(filepath.Join(c.root, rel)),
-			LanguageID: protocol.LanguageKind("python"),
+			LanguageID: protocol.LanguageKind(c.langID(rel)),
 			Version:    1,
 			Text:       string(src),
 		},
@@ -139,21 +160,39 @@ func (c *Client) Definition(ctx context.Context, rel string, pos core.Pos) ([]pr
 	if err != nil {
 		return nil, err
 	}
+	return flattenDefinitionResult(res), nil
+}
+
+// Implementation resolves an interface token to its implementing types (Go).
+func (c *Client) Implementation(ctx context.Context, rel string, pos core.Pos) ([]protocol.Location, error) {
+	if err := c.openDoc(ctx, rel); err != nil {
+		return nil, err
+	}
+	res, err := c.srv.Implementation(ctx, &protocol.ImplementationParams{
+		TextDocumentPositionParams: c.docPos(rel, pos),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return flattenDefinitionResult(res), nil
+}
+
+func flattenDefinitionResult(res protocol.DefinitionResult) []protocol.Location {
 	switch r := res.(type) {
 	case protocol.LocationSlice:
-		return []protocol.Location(r), nil
+		return []protocol.Location(r)
 	case *protocol.Location:
 		if r != nil {
-			return []protocol.Location{*r}, nil
+			return []protocol.Location{*r}
 		}
 	case protocol.DefinitionLinkSlice:
 		var out []protocol.Location
 		for _, l := range r {
 			out = append(out, protocol.Location{URI: l.TargetURI, Range: l.TargetRange})
 		}
-		return out, nil
+		return out
 	}
-	return nil, nil
+	return nil
 }
 
 // hoverText returns the raw hover text at rel:pos.

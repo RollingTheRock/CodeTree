@@ -6,6 +6,7 @@ package lsp
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"codetree/core"
@@ -15,30 +16,50 @@ import (
 // File:ClassLine, its BaseIndex-th SuperTypes entry binds to the definition
 // at TargetFile:TargetLine.
 type BaseBinding struct {
-	File        string // class declaration file (project-relative)
-	ClassLine   int    // class declaration line (1-based)
-	BaseIndex   int    // index into Symbol.SuperTypes
-	TargetFile  string
-	TargetLine  int
+	File       string // class declaration file (project-relative)
+	ClassLine  int    // class declaration line (1-based)
+	BaseIndex  int    // index into Symbol.SuperTypes
+	TargetFile string
+	TargetLine int
 }
 
 // FieldType is a hover-resolved field type at File:Line:Col.
 type FieldType struct {
-	File       string
-	Line, Col  int
-	Type       string
+	File      string
+	Line, Col int
+	Type      string
+}
+
+// ImplBinding is a resolved interface implementation: the interface declared
+// at InterfaceFile:InterfaceLine is implemented by the type at
+// ImplFile:ImplLine (Go textDocument/implementation).
+type ImplBinding struct {
+	InterfaceFile string
+	InterfaceLine int
+	ImplFile      string
+	ImplLine      int
+}
+
+// Corrections is everything one LSP pass learned about the project.
+type Corrections struct {
+	Bases  []BaseBinding
+	Fields []FieldType
+	Impls  []ImplBinding
+	Added  []*core.Symbol
 }
 
 // Diff summarizes what the LSP pass changed — printed by `ct --lsp`.
 type Diff struct {
 	ReboundBases []string // "Dog base Animal → models/base.py:8"
 	FilledFields []string // "Network.stem: ConvBlock"
+	AddedImpls   []string // "Dog implements Speaker"
 	AddedClasses []string // "Color (models/base.py)"
 }
 
 // Empty reports whether the pass changed nothing.
 func (d Diff) Empty() bool {
-	return len(d.ReboundBases) == 0 && len(d.FilledFields) == 0 && len(d.AddedClasses) == 0
+	return len(d.ReboundBases) == 0 && len(d.FilledFields) == 0 &&
+		len(d.AddedImpls) == 0 && len(d.AddedClasses) == 0
 }
 
 func (d Diff) String() string {
@@ -48,6 +69,9 @@ func (d Diff) String() string {
 	}
 	for _, s := range d.FilledFields {
 		fmt.Fprintf(&b, "~ field %s\n", s)
+	}
+	for _, s := range d.AddedImpls {
+		fmt.Fprintf(&b, "~ impl %s\n", s)
 	}
 	for _, s := range d.AddedClasses {
 		fmt.Fprintf(&b, "+ class %s\n", s)
@@ -60,10 +84,15 @@ func (d Diff) String() string {
 
 // Apply merges LSP corrections into the project (in place) and returns the
 // diff. Pure and server-free: unit tests drive it directly.
-func Apply(p *core.Project, bases []BaseBinding, fields []FieldType, added []*core.Symbol) Diff {
+func Apply(p *core.Project, c Corrections) Diff {
 	var d Diff
 
-	for _, b := range bases {
+	for _, b := range c.Bases {
+		// bindings outside the project (stdlib etc.) can't be matched to
+		// graph nodes; skip them rather than printing ../.. paths
+		if strings.HasPrefix(b.TargetFile, "..") {
+			continue
+		}
 		s := findSymbolAt(p, b.File, b.ClassLine)
 		if s == nil || b.BaseIndex >= len(s.SuperTypes) {
 			continue
@@ -79,7 +108,7 @@ func Apply(p *core.Project, bases []BaseBinding, fields []FieldType, added []*co
 		}
 	}
 
-	for _, f := range fields {
+	for _, f := range c.Fields {
 		if f.Type == "" {
 			continue
 		}
@@ -96,13 +125,31 @@ func Apply(p *core.Project, bases []BaseBinding, fields []FieldType, added []*co
 		}
 	}
 
-	for _, s := range added {
+	for _, b := range c.Impls {
+		iface := findSymbolAt(p, b.InterfaceFile, b.InterfaceLine)
+		impl := findSymbolAt(p, b.ImplFile, b.ImplLine)
+		if iface == nil || impl == nil {
+			continue
+		}
+		dup := false
+		for _, in := range impl.Implements {
+			if in == iface.Name {
+				dup = true
+			}
+		}
+		if !dup {
+			impl.Implements = append(impl.Implements, iface.Name)
+			d.AddedImpls = append(d.AddedImpls, fmt.Sprintf("%s implements %s", impl.Name, iface.Name))
+		}
+	}
+
+	for _, s := range c.Added {
 		if findClassInFile(p, s.File, s.Name) != nil {
 			continue // already known statically
 		}
 		f := findFile(p, s.File)
 		if f == nil {
-			f = &core.File{Path: s.File, Lang: "python"}
+			f = &core.File{Path: s.File, Lang: langOfFile(p, s.File)}
 			p.Files = append(p.Files, f)
 		}
 		s.Source = "lsp"
@@ -156,4 +203,15 @@ func findFile(p *core.Project, path string) *core.File {
 		}
 	}
 	return nil
+}
+
+// langOfFile infers the language for a file added by the server (rare:
+// usually the file already exists in the project).
+func langOfFile(p *core.Project, path string) string {
+	for _, f := range p.Files {
+		if filepath.Ext(f.Path) == filepath.Ext(path) {
+			return f.Lang
+		}
+	}
+	return ""
 }

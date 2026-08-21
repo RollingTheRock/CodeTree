@@ -263,10 +263,8 @@ type reloadedMsg struct{}
 
 // lspMsg carries one LSP pass's collected corrections to the main loop.
 type lspMsg struct {
-	out    lsp.Outcome
-	bases  []lsp.BaseBinding
-	fields []lsp.FieldType
-	added  []*core.Symbol
+	out  lsp.Outcome
+	corr lsp.Corrections
 }
 
 // waitForChange blocks until the watcher fires; nil channel = never fires.
@@ -286,8 +284,8 @@ func warmLSP(root string, proj *core.Project) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		out, bases, fields, added := lsp.Collect(ctx, root, proj)
-		return lspMsg{out, bases, fields, added}
+		out, corr := lsp.Collect(ctx, root, proj)
+		return lspMsg{out, corr}
 	}
 }
 
@@ -360,7 +358,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case lspMsg:
 		m.lspStat = msg.out.Status
 		if msg.out.Status == lsp.StatusReady {
-			lsp.Apply(m.proj, msg.bases, msg.fields, msg.added)
+			lsp.Apply(m.proj, msg.corr)
 			m.root = buildTree(m.proj)
 			m.reflow()
 			m.pickerFiles = pickerEntries(m.proj)

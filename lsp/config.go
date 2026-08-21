@@ -30,6 +30,12 @@ var defaultServers = map[string][]ServerConfig{
 		{Command: "basedpyright-langserver", Args: []string{"--stdio"}},
 		{Command: "pyright-langserver", Args: []string{"--stdio"}},
 	},
+	"go":         {{Command: "gopls"}},
+	"cpp":        {{Command: "clangd"}},
+	"java":       {{Command: "jdtls"}},
+	"rust":       {{Command: "rust-analyzer"}},
+	"typescript": {{Command: "typescript-language-server", Args: []string{"--stdio"}}},
+	"javascript": {{Command: "typescript-language-server", Args: []string{"--stdio"}}},
 }
 
 // ConfigPath is ~/.config/codetree/config.toml (honors XDG_CONFIG_HOME).

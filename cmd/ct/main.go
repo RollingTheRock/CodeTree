@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/term"
@@ -20,7 +21,9 @@ import (
 	_ "codetree/langs/cpp"
 	_ "codetree/langs/golang"
 	_ "codetree/langs/java"
+	_ "codetree/langs/jsts"
 	_ "codetree/langs/python"
+	_ "codetree/langs/rust"
 	"codetree/lsp"
 	"codetree/render/json"
 	"codetree/render/mermaid"
@@ -129,7 +132,8 @@ func main() {
 		out := lsp.Warm(ctx, abs, proj)
 		fmt.Fprintf(os.Stderr, "ct: lsp %s", out.Status)
 		if out.Status == lsp.StatusReady {
-			fmt.Fprintf(os.Stderr, " (startup %s, %d requests)", out.Startup.Round(time.Millisecond), out.Requests)
+			fmt.Fprintf(os.Stderr, " (langs %s, startup %s, %d requests)",
+				strings.Join(out.Langs, ","), out.Startup.Round(time.Millisecond), out.Requests)
 		}
 		if out.Err != nil {
 			fmt.Fprintf(os.Stderr, " (error: %v)", out.Err)
