@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // BaseBinding is a resolved base-class mention: the class declared at

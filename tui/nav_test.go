@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // navFixture builds: tree1 A→(B, C), tree2 X→Y, orphan O.

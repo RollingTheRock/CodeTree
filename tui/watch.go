@@ -12,8 +12,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 	ignore "github.com/sabhiram/go-gitignore"
 
-	"codetree/core"
-	"codetree/langs"
+	"github.com/RollingTheRock/CodeTree/core"
+	"github.com/RollingTheRock/CodeTree/langs"
 )
 
 // debounceInterval merges editor save bursts (write+chmod+rename) into one

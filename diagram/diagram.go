@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // Layout constants (character cells).

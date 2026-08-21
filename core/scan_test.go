@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"codetree/core"
-	"codetree/langs"
-	_ "codetree/langs/golang"
-	_ "codetree/langs/python"
+	"github.com/RollingTheRock/CodeTree/core"
+	"github.com/RollingTheRock/CodeTree/langs"
+	_ "github.com/RollingTheRock/CodeTree/langs/golang"
+	_ "github.com/RollingTheRock/CodeTree/langs/python"
 )
 
 func write(t *testing.T, root, rel, content string) {

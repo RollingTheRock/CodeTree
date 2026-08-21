@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"codetree/core"
-	"codetree/diagram"
+	"github.com/RollingTheRock/CodeTree/core"
+	"github.com/RollingTheRock/CodeTree/diagram"
 )
 
 // Render emits a valid Mermaid classDiagram. Classes (and Go structs /

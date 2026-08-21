@@ -1,4 +1,4 @@
-module codetree
+module github.com/RollingTheRock/CodeTree
 
 go 1.26.2
 

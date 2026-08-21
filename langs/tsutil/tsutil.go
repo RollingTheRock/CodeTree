@@ -14,7 +14,7 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // Parse parses src with the given tree-sitter language and returns the root

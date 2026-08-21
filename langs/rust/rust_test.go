@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 const fixture = `

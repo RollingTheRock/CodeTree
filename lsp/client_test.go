@@ -11,7 +11,7 @@ import (
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // fakeServer answers a fixed script of LSP methods over an in-memory stream.

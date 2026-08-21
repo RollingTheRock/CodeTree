@@ -3,8 +3,8 @@ package tui
 import (
 	"testing"
 
-	"codetree/core"
-	"codetree/lsp"
+	"github.com/RollingTheRock/CodeTree/core"
+	"github.com/RollingTheRock/CodeTree/lsp"
 )
 
 func lspTestProj() *core.Project {

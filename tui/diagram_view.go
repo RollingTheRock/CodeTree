@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"codetree/diagram"
+	"github.com/RollingTheRock/CodeTree/diagram"
 )
 
 func (m model) updateDiagram(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

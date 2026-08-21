@@ -20,10 +20,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"codetree/core"
-	"codetree/diagram"
-	"codetree/langs"
-	"codetree/lsp"
+	"github.com/RollingTheRock/CodeTree/core"
+	"github.com/RollingTheRock/CodeTree/diagram"
+	"github.com/RollingTheRock/CodeTree/langs"
+	"github.com/RollingTheRock/CodeTree/lsp"
 )
 
 // ---- node tree ------------------------------------------------------------

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 func parseFixture(t *testing.T) []*core.Symbol {

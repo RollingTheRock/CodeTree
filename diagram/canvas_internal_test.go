@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 func updating() bool {

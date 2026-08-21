@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"codetree/lsp"
+	"github.com/RollingTheRock/CodeTree/lsp"
 )
 
 // ---- status bar styles ----------------------------------------------------

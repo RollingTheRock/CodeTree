@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"codetree/core"
-	"codetree/diagram"
+	"github.com/RollingTheRock/CodeTree/core"
+	"github.com/RollingTheRock/CodeTree/diagram"
 )
 
 var update = flag.Bool("update", false, "update golden files")

@@ -8,9 +8,9 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
-	"codetree/core"
-	"codetree/langs"
-	_ "codetree/langs/python"
+	"github.com/RollingTheRock/CodeTree/core"
+	"github.com/RollingTheRock/CodeTree/langs"
+	_ "github.com/RollingTheRock/CodeTree/langs/python"
 )
 
 var testExts = map[string]bool{".py": true, ".go": true}

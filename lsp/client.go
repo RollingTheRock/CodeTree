@@ -14,7 +14,7 @@ import (
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // Client is a minimal LSP client over stdio. One client per language pass.

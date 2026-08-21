@@ -10,8 +10,8 @@ import (
 	"go/token"
 	"strings"
 
-	"codetree/core"
-	"codetree/langs"
+	"github.com/RollingTheRock/CodeTree/core"
+	"github.com/RollingTheRock/CodeTree/langs"
 )
 
 type lang struct{}

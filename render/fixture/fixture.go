@@ -2,7 +2,7 @@
 // golden tests.
 package fixture
 
-import "codetree/core"
+import "github.com/RollingTheRock/CodeTree/core"
 
 // Project returns the "zoo" sample matching the README example.
 func Project() *core.Project {

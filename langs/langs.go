@@ -5,7 +5,7 @@ package langs
 import (
 	"strings"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // Language is a pluggable source parser.

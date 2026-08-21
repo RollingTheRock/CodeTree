@@ -7,9 +7,9 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/python"
 
-	"codetree/core"
-	"codetree/langs"
-	"codetree/langs/tsutil"
+	"github.com/RollingTheRock/CodeTree/core"
+	"github.com/RollingTheRock/CodeTree/langs"
+	"github.com/RollingTheRock/CodeTree/langs/tsutil"
 )
 
 const querySource = `

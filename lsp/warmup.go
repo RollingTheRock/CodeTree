@@ -10,7 +10,7 @@ import (
 
 	"go.lsp.dev/protocol"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // Status is the LSP layer's state for the status bar.

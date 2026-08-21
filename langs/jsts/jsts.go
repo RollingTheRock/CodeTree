@@ -11,9 +11,9 @@ import (
 	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 
-	"codetree/core"
-	"codetree/langs"
-	"codetree/langs/tsutil"
+	"github.com/RollingTheRock/CodeTree/core"
+	"github.com/RollingTheRock/CodeTree/langs"
+	"github.com/RollingTheRock/CodeTree/langs/tsutil"
 )
 
 // JS grammar uses (identifier) for class names, TS uses (type_identifier).

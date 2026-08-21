@@ -8,7 +8,7 @@ import (
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // TestWarmEndToEnd drives a full pass against the in-process fake server:

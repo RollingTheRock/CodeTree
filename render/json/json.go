@@ -4,7 +4,7 @@ package json
 import (
 	"encoding/json"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // Options controls JSON rendering.

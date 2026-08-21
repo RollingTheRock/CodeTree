@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // Options controls text rendering.

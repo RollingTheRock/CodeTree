@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"codetree/core"
-	"codetree/render/fixture"
+	"github.com/RollingTheRock/CodeTree/core"
+	"github.com/RollingTheRock/CodeTree/render/fixture"
 )
 
 // enterDiagram drives the picker: confirm with no marks = cursor file scope.

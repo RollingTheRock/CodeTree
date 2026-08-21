@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"codetree/render/fixture"
-	"codetree/render/mermaid"
+	"github.com/RollingTheRock/CodeTree/render/fixture"
+	"github.com/RollingTheRock/CodeTree/render/mermaid"
 )
 
 func TestRender(t *testing.T) {

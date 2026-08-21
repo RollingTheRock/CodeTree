@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"codetree/render/fixture"
+	"github.com/RollingTheRock/CodeTree/render/fixture"
 )
 
 func init() {

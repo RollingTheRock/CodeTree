@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"codetree/core"
+	"github.com/RollingTheRock/CodeTree/core"
 )
 
 // gnode is a node in the inheritance forest.

@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"codetree/render/fixture"
-	"codetree/render/json"
+	"github.com/RollingTheRock/CodeTree/render/fixture"
+	"github.com/RollingTheRock/CodeTree/render/json"
 )
 
 var update = flag.Bool("update", false, "update golden files")
