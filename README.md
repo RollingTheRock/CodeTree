@@ -46,6 +46,7 @@ myproject/
 - `ct -f json .` —— 结构化 JSON（含 kind、file:line、docstring、supertypes、fields），供脚本消费
 - `ct -f mermaid .` —— 合法 Mermaid `classDiagram`，含继承边 `Animal <|-- Dog`
 - `ct -f diagram .` —— 终端内字符画布 UML 类继承图（自研 tidy-tree 布局，无第三方布局库）
+- `ct -lsp -f diagram .` —— 先跑 LSP 语义修正（Python），stderr 打印修正 diff，再渲染修正后的模型
 
 ### 类图（-f diagram）
 
@@ -153,6 +154,8 @@ langs/golang/      标准库 go/ast 实现 —— 证明可插拔且不增加 cg
 render/text/       缩进树（│ ├─ └─ 引导线）
 render/json/       结构化 JSON
 render/mermaid/    Mermaid classDiagram（含继承边）
+lsp/               可选 LSP 语义层（Python）：go.lsp.dev/protocol 客户端 +
+                   server 探测（TOML 配置，可插拔）+ 事实修正/增补（resolver）
 diagram/           字符画布 UML 类图：建继承森林 → Buchheim tidy-tree 布局（字符格）
                    → 方向位掩码 elbow 布线 → 卡片渲染；纯函数，不依赖 TUI
 tui/               bubbletea 浏览器（薄壳，只消费 core.Project / diagram.Diagram）
@@ -161,7 +164,7 @@ tui/               bubbletea 浏览器（薄壳，只消费 core.Project / diagr
 数据流：`langs/*` 把源码解析成 `core.Symbol` 树 → `core.Scan` 聚合成 `core.Project` →
 `render/*` / `tui/` 各自消费。查询与渲染完全分离。
 
-符号模型为 v2 预留了 LSP 扩展位：`Symbol.SuperTypes`（v1 为文本级基类名，v2 由 LSP 填精确类型）、`Symbol.Doc`。
+符号模型带 LSP 语义层扩展位：`Symbol.BasePos`（基类 token 位置）、`Symbol.BaseRefs`（LSP 解析后的精确绑定）、`Symbol.Source`（static/lsp 来源标记）、`Field.Line/Col`（hover 定位用）。
 
 ## 当前支持
 
@@ -172,11 +175,31 @@ tui/               bubbletea 浏览器（薄壳，只消费 core.Project / diagr
 
 类图边语义：实线 `▲` = 继承（extends），绿色虚线 `┆/┄` = 实现（implements），灰色 = 外部基类。无法解析的 implements 接口降级为卡片标题 `~Iface` 标注。
 
-## v2 路线图（LSP 语义层）
+## LSP 语义层（可选，当前支持 Python）
 
-- LSP 语义层：以 v1 静态树为骨架，用 gopls / pyright 等填精确符号信息
-- type hierarchy / call hierarchy（`SuperTypes` 升级为解析后的精确类型）
-- 后台 daemon：文件监听 + 增量索引，TUI 实时刷新
+静态扫描打底、LSP 修正与增补：TUI 永远先用静态结果秒开；PATH 里探测到 server 就异步热身，就绪后自动刷新视图；没装 server 就安静保持纯静态，零报错零卡顿。状态栏右侧显示 `lsp warming… / ready / failed`。
+
+修正三类事实：
+
+- **基类消歧**：`definition` 打在基类 token 上，extends 边绑定到精确符号——两个文件各有同名 `Base` 时不再接错边（同名类现在都作为独立节点出现）
+- **字段类型**：`hover` 补全静态推断不出的字段类型（如 `self.x = Dog()` 无注解场景），组合 ◆ 边更全
+- **类增补**：`documentSymbol` 捞回静态漏掉的动态类（`Color = Enum('Color', ...)`、`namedtuple` 等），带 `lsp` 来源标记
+
+server 可插拔、不捆绑，配置文件 `~/.config/codetree/config.toml`：
+
+```toml
+[lsp.python]
+command = "basedpyright-langserver"   # 或 pyright-langserver / jedi-language-server
+args = ["--stdio"]
+# enabled = false                     # 关掉这一层
+```
+
+不配文件时按默认表探测（basedpyright → pyright）。CLI 侧用 `ct -lsp` 跑修正并打印 diff。
+
+## 路线图
+
+- LSP 层铺开更多语言（gopls / clangd / jdtls），复用现有 client 与 resolver
+- type hierarchy / call hierarchy 更深的关系数据
 - 更多语言（rust/typescript），复用 tree-sitter 通道
 
 ## 开发
