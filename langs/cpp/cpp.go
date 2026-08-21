@@ -2,8 +2,6 @@
 package cpp
 
 import (
-	"context"
-	"fmt"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -11,6 +9,7 @@ import (
 
 	"codetree/core"
 	"codetree/langs"
+	"codetree/langs/tsutil"
 )
 
 const querySource = `
@@ -57,55 +56,39 @@ type item struct {
 
 // Parse extracts the symbol tree of one C++ source/header file.
 func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symbol, error) {
-	parser := sitter.NewParser()
-	parser.SetLanguage(cpp.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, src)
+	root, err := tsutil.Parse(cpp.GetLanguage(), src)
 	if err != nil {
 		return nil, err
 	}
-	root := tree.RootNode()
-
-	q, err := sitter.NewQuery([]byte(querySource), cpp.GetLanguage())
-	if err != nil {
-		return nil, err
-	}
-	qc := sitter.NewQueryCursor()
-	qc.Exec(q, root)
 
 	var items []*item
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-		var defNode, nameNode, basesNode, paramsNode *sitter.Node
-		var defKind, fname, ftyp string
-		for _, c := range m.Captures {
-			switch q.CaptureNameForId(c.Index) {
-			case "class", "struct", "enum", "funcdef", "methdecl", "field":
-				defNode, defKind = c.Node, q.CaptureNameForId(c.Index)
-			case "name":
-				nameNode = c.Node
-			case "bases":
-				basesNode = c.Node
-			case "params", "mparams":
-				paramsNode = c.Node
-			case "fname", "mname":
-				fname = c.Node.Content(src)
-			case "fname2":
-				fname = c.Node.Content(src)
-			case "ftype":
-				ftyp = compactWS(c.Node.Content(src))
+	err = tsutil.Each(cpp.GetLanguage(), querySource, root, func(c tsutil.Captures) {
+		defKind := ""
+		for _, k := range []string{"class", "struct", "enum", "funcdef", "methdecl", "field"} {
+			if c[k] != nil {
+				defKind = k
+				break
 			}
 		}
+		defNode := c[defKind]
 		if defNode == nil {
-			continue
+			return
+		}
+		nameNode := c["name"]
+		basesNode := c["bases"]
+		paramsNode := c.First("params", "mparams")
+		var fname, ftyp string
+		if fn := c.First("fname", "mname", "fname2"); fn != nil {
+			fname = tsutil.Content(fn, src)
+		}
+		if ft := c["ftype"]; ft != nil {
+			ftyp = tsutil.CompactWS(tsutil.Content(ft, src))
 		}
 		it := &item{node: defNode}
-		line := int(defNode.StartPoint().Row) + 1
+		line := tsutil.Line(defNode)
 		switch defKind {
 		case "class", "struct":
-			sym := &core.Symbol{Name: nameNode.Content(src), Line: line, Col: int(nameNode.StartPoint().Column), File: path}
+			sym := &core.Symbol{Name: tsutil.Content(nameNode, src), Line: line, Col: int(nameNode.StartPoint().Column), File: path}
 			if defKind == "class" {
 				sym.Kind = core.KindClass
 			} else {
@@ -121,7 +104,7 @@ func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symb
 		case "enum":
 			name := "enum"
 			if nameNode != nil {
-				name = nameNode.Content(src)
+				name = tsutil.Content(nameNode, src)
 			}
 			it.sym = &core.Symbol{Name: name, Kind: core.KindEnum, Line: line, File: path}
 		case "funcdef", "methdecl":
@@ -129,7 +112,7 @@ func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symb
 			scope, name := splitQualified(fname)
 			sym := &core.Symbol{Name: name, Kind: core.KindFunction, Line: line, File: path}
 			if paramsNode != nil {
-				sym.Detail = compactWS(paramsNode.Content(src))
+				sym.Detail = tsutil.CompactWS(tsutil.Content(paramsNode, src))
 			}
 			it.sym = sym
 			it.scope = scope
@@ -141,21 +124,16 @@ func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symb
 		if it.sym != nil {
 			items = append(items, it)
 		}
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return assemble(root, items, opts), nil
 }
 
-func nodeKey(n *sitter.Node) string {
-	return fmt.Sprintf("%s:%d:%d", n.Type(), n.StartByte(), n.EndByte())
-}
-
 func isContainer(k core.Kind) bool {
-	switch k {
-	case core.KindClass, core.KindStruct, core.KindEnum:
-		return true
-	}
-	return false
+	return k.ClassLike()
 }
 
 // splitQualified splits "Dog::bark" → ("Dog", "bark"); plain names get "".
@@ -169,11 +147,11 @@ func splitQualified(name string) (scope, base string) {
 func assemble(root *sitter.Node, items []*item, opts core.ParseOptions) []*core.Symbol {
 	byKey := map[string]*item{}
 	for _, it := range items {
-		byKey[nodeKey(it.node)] = it
+		byKey[tsutil.NodeKey(it.node)] = it
 	}
 	nearest := func(n *sitter.Node) *item {
 		for p := n.Parent(); p != nil && p != root; p = p.Parent() {
-			if pi, ok := byKey[nodeKey(p)]; ok {
+			if pi, ok := byKey[tsutil.NodeKey(p)]; ok {
 				return pi
 			}
 		}
@@ -238,19 +216,19 @@ func baseNames(clause *sitter.Node, src []byte) ([]string, []core.Pos) {
 	var pos []core.Pos
 	put := func(name string, n *sitter.Node) {
 		out = append(out, name)
-		pos = append(pos, core.Pos{Line: int(n.StartPoint().Row) + 1, Col: int(n.StartPoint().Column)})
+		pos = append(pos, tsutil.Pos(n))
 	}
 	for i := 0; i < int(clause.NamedChildCount()); i++ {
 		c := clause.NamedChild(i)
 		switch c.Type() {
 		case "type_identifier":
-			put(c.Content(src), c)
+			put(tsutil.Content(c, src), c)
 		case "template_type":
 			if n := c.ChildByFieldName("name"); n != nil {
-				put(n.Content(src), n)
+				put(tsutil.Content(n, src), n)
 			}
 		case "qualified_identifier", "scoped_identifier":
-			text := c.Content(src)
+			text := tsutil.Content(c, src)
 			if i := strings.LastIndex(text, "::"); i >= 0 {
 				// position of the bare name after the last ::
 				col := int(c.StartPoint().Column) + i + 2
@@ -262,8 +240,4 @@ func baseNames(clause *sitter.Node, src []byte) ([]string, []core.Pos) {
 		}
 	}
 	return out, pos
-}
-
-func compactWS(s string) string {
-	return strings.Join(strings.Fields(s), " ")
 }

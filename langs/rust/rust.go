@@ -4,8 +4,6 @@
 package rust
 
 import (
-	"context"
-	"fmt"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -13,6 +11,7 @@ import (
 
 	"codetree/core"
 	"codetree/langs"
+	"codetree/langs/tsutil"
 )
 
 const querySource = `
@@ -61,62 +60,52 @@ type item struct {
 
 // Parse extracts the symbol tree of one Rust source file.
 func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symbol, error) {
-	parser := sitter.NewParser()
-	parser.SetLanguage(rust.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, src)
+	root, err := tsutil.Parse(rust.GetLanguage(), src)
 	if err != nil {
 		return nil, err
 	}
-	root := tree.RootNode()
-
-	q, err := sitter.NewQuery([]byte(querySource), rust.GetLanguage())
-	if err != nil {
-		return nil, err
-	}
-	qc := sitter.NewQueryCursor()
-	qc.Exec(q, root)
 
 	var items []*item
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-		var defNode, nameNode, paramsNode, implTypeNode *sitter.Node
-		var defKind, fieldName, fieldTyp string
-		var it item
-		for _, c := range m.Captures {
-			switch q.CaptureNameForId(c.Index) {
-			case "struct", "enum", "trait", "func", "sigfn", "field":
-				defNode, defKind = c.Node, q.CaptureNameForId(c.Index)
-			case "impl":
-				defNode, defKind = c.Node, q.CaptureNameForId(c.Index)
-				it.node = c.Node
-			case "name":
-				nameNode = c.Node
-			case "params":
-				paramsNode = c.Node
-			case "impl.trait":
-				it.implTrait = c.Node.Content(src)
-				it.traitPos = core.Pos{Line: int(c.Node.StartPoint().Row) + 1, Col: int(c.Node.StartPoint().Column)}
-			case "impl.type":
-				implTypeNode = c.Node
-			case "field.name":
-				fieldName = c.Node.Content(src)
-				it.pos = core.Pos{Line: int(c.Node.StartPoint().Row) + 1, Col: int(c.Node.StartPoint().Column)}
-			case "field.type":
-				fieldTyp = compactWS(c.Node.Content(src))
+	err = tsutil.Each(rust.GetLanguage(), querySource, root, func(c tsutil.Captures) {
+		defKind := ""
+		for _, k := range []string{"struct", "enum", "trait", "func", "sigfn", "field", "impl"} {
+			if c[k] != nil {
+				defKind = k
+				break
 			}
 		}
-		if defNode == nil {
-			continue
+		defNode := c[defKind]
+		var fieldName, fieldTyp string
+		var it item
+		nameNode := c["name"]
+		paramsNode := c["params"]
+		var implTypeNode *sitter.Node
+		if im := c["impl"]; im != nil {
+			it.node = im
 		}
-		line := int(defNode.StartPoint().Row) + 1
+		if tn := c["impl.trait"]; tn != nil {
+			it.implTrait = tsutil.Content(tn, src)
+			it.traitPos = tsutil.Pos(tn)
+		}
+		if tn := c["impl.type"]; tn != nil {
+			implTypeNode = tn
+		}
+		if fn := c["field.name"]; fn != nil {
+			fieldName = tsutil.Content(fn, src)
+			it.pos = tsutil.Pos(fn)
+		}
+		if ft := c["field.type"]; ft != nil {
+			fieldTyp = tsutil.CompactWS(tsutil.Content(ft, src))
+		}
+		if defNode == nil {
+			return
+		}
+		line := tsutil.Line(defNode)
 		switch defKind {
 		case "struct", "enum", "trait":
 			sym := &core.Symbol{
-				Name: nameNode.Content(src), Line: line, File: path,
-				Col: int(nameNode.StartPoint().Column),
+				Name: tsutil.Content(nameNode, src), Line: line, File: path,
+				Col: tsutil.Pos(nameNode).Col,
 			}
 			switch defKind {
 			case "struct":
@@ -130,14 +119,14 @@ func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symb
 			it.node = defNode
 		case "impl":
 			if implTypeNode == nil {
-				continue
+				return
 			}
-			it.implType = bareType(implTypeNode.Content(src))
+			it.implType = bareType(tsutil.Content(implTypeNode, src))
 			it.node = defNode
 		case "func", "sigfn":
 			it.sym = &core.Symbol{
-				Name: nameNode.Content(src), Kind: core.KindFunction, Line: line, File: path,
-				Detail: compactWS(paramsNode.Content(src)),
+				Name: tsutil.Content(nameNode, src), Kind: core.KindFunction, Line: line, File: path,
+				Detail: tsutil.CompactWS(paramsNode.Content(src)),
 			}
 			it.node = defNode
 		case "field":
@@ -148,13 +137,12 @@ func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symb
 		if it.sym != nil || it.implType != "" {
 			items = append(items, &it)
 		}
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return assemble(root, items, opts), nil
-}
-
-func nodeKey(n *sitter.Node) string {
-	return fmt.Sprintf("%s:%d:%d", n.Type(), n.StartByte(), n.EndByte())
 }
 
 // bareType strips generics/references from an impl target ("&'a Foo<T>" → "Foo").
@@ -168,11 +156,11 @@ func bareType(s string) string {
 func assemble(root *sitter.Node, items []*item, opts core.ParseOptions) []*core.Symbol {
 	byKey := map[string]*item{}
 	for _, it := range items {
-		byKey[nodeKey(it.node)] = it
+		byKey[tsutil.NodeKey(it.node)] = it
 	}
 	nearest := func(n *sitter.Node) *item {
 		for p := n.Parent(); p != nil && p != root; p = p.Parent() {
-			if pi, ok := byKey[nodeKey(p)]; ok {
+			if pi, ok := byKey[tsutil.NodeKey(p)]; ok {
 				return pi
 			}
 		}
@@ -224,8 +212,4 @@ func assemble(root *sitter.Node, items []*item, opts core.ParseOptions) []*core.
 		}
 	}
 	return top
-}
-
-func compactWS(s string) string {
-	return strings.Join(strings.Fields(s), " ")
 }

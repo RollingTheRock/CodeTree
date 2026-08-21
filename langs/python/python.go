@@ -2,8 +2,6 @@
 package python
 
 import (
-	"context"
-	"fmt"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -11,6 +9,7 @@ import (
 
 	"codetree/core"
 	"codetree/langs"
+	"codetree/langs/tsutil"
 )
 
 const querySource = `
@@ -62,102 +61,80 @@ type attrItem struct {
 
 // Parse extracts the symbol tree of one Python source file.
 func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symbol, error) {
-	parser := sitter.NewParser()
-	parser.SetLanguage(python.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, src)
+	root, err := tsutil.Parse(python.GetLanguage(), src)
 	if err != nil {
 		return nil, err
 	}
-	root := tree.RootNode()
-
-	q, err := sitter.NewQuery([]byte(querySource), python.GetLanguage())
-	if err != nil {
-		return nil, err
-	}
-	qc := sitter.NewQueryCursor()
-	qc.Exec(q, root)
 
 	var items []*item
 	var attrs []*attrItem
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-		var defNode, nameNode, auxNode, typeNode, valNode *sitter.Node
-		var defKind string
-		var attr attrItem
-		for _, c := range m.Captures {
-			capName := q.CaptureNameForId(c.Index)
-			switch capName {
-			case "class", "func", "var":
-				defNode, defKind = c.Node, capName
-			case "attr":
-				defNode, defKind = c.Node, capName
-				attr.node = c.Node
-			case "name":
-				nameNode = c.Node
-			case "bases", "params":
-				auxNode = c.Node
-			case "var.type", "attr.type":
-				typeNode = c.Node
-			case "var.value", "attr.value":
-				valNode = c.Node
-			case "attr.obj":
-				attr.obj = c.Node.Content(src)
-			case "attr.name":
-				attr.name = c.Node.Content(src)
-				attr.pos = core.Pos{Line: int(c.Node.StartPoint().Row) + 1, Col: int(c.Node.StartPoint().Column)}
+	err = tsutil.Each(python.GetLanguage(), querySource, root, func(c tsutil.Captures) {
+		defKind := ""
+		for _, k := range []string{"class", "func", "var", "attr"} {
+			if c[k] != nil {
+				defKind = k
+				break
 			}
 		}
+		defNode := c[defKind]
 		if defNode == nil {
-			continue
+			return
 		}
+		nameNode := c["name"]
+		auxNode := c.First("bases", "params")
+		typeNode := c.First("var.type", "attr.type")
+		valNode := c.First("var.value", "attr.value")
+
 		typ, val := "", ""
 		if typeNode != nil {
-			typ = compactWS(typeNode.Content(src))
+			typ = tsutil.CompactWS(tsutil.Content(typeNode, src))
 		}
 		if valNode != nil {
 			val = inferType(valNode, src)
 		}
-		if defKind == "attr" {
+		if an := c["attr"]; an != nil {
+			attr := attrItem{node: an, typ: typ, val: val}
+			if o := c["attr.obj"]; o != nil {
+				attr.obj = tsutil.Content(o, src)
+			}
+			if nm := c["attr.name"]; nm != nil {
+				attr.name = tsutil.Content(nm, src)
+				attr.pos = tsutil.Pos(nm)
+			}
 			if attr.obj == "self" && attr.name != "" {
-				attr.typ, attr.val = typ, val
 				attrs = append(attrs, &attr)
 			}
-			continue
+			return
 		}
 		if nameNode == nil {
-			continue
+			return
 		}
 		sym := buildSymbol(defKind, defNode, nameNode, auxNode, src)
 		sym.File = path
 		it := &item{node: defNode, sym: sym, typ: typ, val: val}
 		if defKind == "var" {
-			it.pos = core.Pos{Line: int(nameNode.StartPoint().Row) + 1, Col: int(nameNode.StartPoint().Column)}
+			it.pos = tsutil.Pos(nameNode)
 		}
 		items = append(items, it)
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return assemble(root, items, attrs, opts), nil
-}
-
-// nodeKey uniquely identifies a syntax node by its byte range.
-func nodeKey(n *sitter.Node) string {
-	return fmt.Sprintf("%s:%d:%d", n.Type(), n.StartByte(), n.EndByte())
 }
 
 func buildSymbol(kind string, defNode, nameNode, auxNode *sitter.Node, src []byte) *core.Symbol {
 	sym := &core.Symbol{
 		Name: nameNode.Content(src),
 		Line: int(defNode.StartPoint().Row) + 1,
-		Col:  int(nameNode.StartPoint().Column),
+		Col:  tsutil.Pos(nameNode).Col,
 	}
 	switch kind {
 	case "class":
 		sym.Kind = core.KindClass
 		if auxNode != nil {
-			sym.Detail = compactWS(auxNode.Content(src)) // e.g. "(Animal, Mixin)"
+			sym.Detail = tsutil.CompactWS(auxNode.Content(src)) // e.g. "(Animal, Mixin)"
 			sym.SuperTypes, sym.BasePos = baseNames(auxNode, src)
 		}
 		sym.Kind = classifyClass(sym.SuperTypes)
@@ -169,7 +146,7 @@ func buildSymbol(kind string, defNode, nameNode, auxNode *sitter.Node, src []byt
 			parts = append(parts, "async")
 		}
 		if auxNode != nil {
-			parts = append(parts, compactWS(auxNode.Content(src))) // e.g. "(self, x)"
+			parts = append(parts, tsutil.CompactWS(auxNode.Content(src))) // e.g. "(self, x)"
 		}
 		if decs := decorators(defNode, src); len(decs) > 0 {
 			parts = append(parts, strings.Join(decs, " "))
@@ -192,14 +169,14 @@ func buildSymbol(kind string, defNode, nameNode, auxNode *sitter.Node, src []byt
 func assemble(root *sitter.Node, items []*item, attrs []*attrItem, opts core.ParseOptions) []*core.Symbol {
 	byKey := map[string]*item{}
 	for _, it := range items {
-		byKey[nodeKey(it.node)] = it
+		byKey[tsutil.NodeKey(it.node)] = it
 	}
 	nearest := func(n *sitter.Node) *item {
 		for p := n.Parent(); p != nil; p = p.Parent() {
 			if p == root {
 				return nil
 			}
-			if pi, ok := byKey[nodeKey(p)]; ok {
+			if pi, ok := byKey[tsutil.NodeKey(p)]; ok {
 				return pi
 			}
 		}
@@ -300,10 +277,10 @@ func inferType(n *sitter.Node, src []byte) string {
 		return "tuple"
 	case "call": // Foo() → Foo
 		if f := n.ChildByFieldName("function"); f != nil {
-			return compactWS(f.Content(src))
+			return tsutil.CompactWS(f.Content(src))
 		}
 	case "attribute": // self.x = module.CONST
-		return compactWS(n.Content(src))
+		return tsutil.CompactWS(n.Content(src))
 	}
 	return ""
 }
@@ -395,11 +372,7 @@ func baseNames(args *sitter.Node, src []byte) ([]string, []core.Pos) {
 			continue
 		}
 		out = append(out, c.Content(src))
-		pos = append(pos, core.Pos{Line: int(c.StartPoint().Row) + 1, Col: int(c.StartPoint().Column)})
+		pos = append(pos, tsutil.Pos(c))
 	}
 	return out, pos
-}
-
-func compactWS(s string) string {
-	return strings.Join(strings.Fields(s), " ")
 }

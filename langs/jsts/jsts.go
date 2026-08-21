@@ -4,8 +4,6 @@
 package jsts
 
 import (
-	"context"
-	"fmt"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -15,6 +13,7 @@ import (
 
 	"codetree/core"
 	"codetree/langs"
+	"codetree/langs/tsutil"
 )
 
 // JS grammar uses (identifier) for class names, TS uses (type_identifier).
@@ -94,54 +93,40 @@ type item struct {
 }
 
 func parse(language *sitter.Language, query, path string, src []byte) ([]*core.Symbol, error) {
-	parser := sitter.NewParser()
-	parser.SetLanguage(language)
-	tree, err := parser.ParseCtx(context.Background(), nil, src)
+	root, err := tsutil.Parse(language, src)
 	if err != nil {
 		return nil, err
 	}
-	root := tree.RootNode()
-
-	q, err := sitter.NewQuery([]byte(query), language)
-	if err != nil {
-		return nil, err
-	}
-	qc := sitter.NewQueryCursor()
-	qc.Exec(q, root)
 
 	var items []*item
-	for {
-		m, ok := qc.NextMatch()
-		if !ok {
-			break
-		}
-		var defNode, nameNode, heritageNode, paramsNode *sitter.Node
-		var defKind, fieldTyp string
-		var it item
-		for _, c := range m.Captures {
-			switch q.CaptureNameForId(c.Index) {
-			case "class", "iface", "enum", "method", "func", "field":
-				defNode, defKind = c.Node, q.CaptureNameForId(c.Index)
-			case "name":
-				nameNode = c.Node
-			case "heritage":
-				heritageNode = c.Node
-			case "params":
-				paramsNode = c.Node
-			case "field.name":
-				nameNode = c.Node // also serves as the field's name
-				it.pos = core.Pos{Line: int(c.Node.StartPoint().Row) + 1, Col: int(c.Node.StartPoint().Column)}
-			case "field.type":
-				fieldTyp = stripAnnotation(c.Node.Content(src))
+	err = tsutil.Each(language, query, root, func(c tsutil.Captures) {
+		defKind := ""
+		for _, k := range []string{"class", "iface", "enum", "method", "func", "field"} {
+			if c[k] != nil {
+				defKind = k
+				break
 			}
 		}
+		defNode := c[defKind]
+		var fieldTyp string
+		var it item
+		nameNode := c["name"]
+		heritageNode := c["heritage"]
+		paramsNode := c["params"]
+		if fn := c["field.name"]; fn != nil {
+			nameNode = fn // also serves as the field's name
+			it.pos = tsutil.Pos(fn)
+		}
+		if ft := c["field.type"]; ft != nil {
+			fieldTyp = stripAnnotation(tsutil.Content(ft, src))
+		}
 		if defNode == nil || nameNode == nil {
-			continue
+			return
 		}
 		sym := &core.Symbol{
-			Name: nameNode.Content(src),
-			Line: int(defNode.StartPoint().Row) + 1,
-			Col:  int(nameNode.StartPoint().Column),
+			Name: tsutil.Content(nameNode, src),
+			Line: tsutil.Line(defNode),
+			Col:  tsutil.Pos(nameNode).Col,
 			File: path,
 		}
 		switch defKind {
@@ -160,7 +145,7 @@ func parse(language *sitter.Language, query, path string, src []byte) ([]*core.S
 		case "method", "func":
 			sym.Kind = core.KindFunction // promoted to Method in assembly
 			if paramsNode != nil {
-				sym.Detail = compactWS(paramsNode.Content(src))
+				sym.Detail = tsutil.CompactWS(paramsNode.Content(src))
 			}
 		case "field":
 			sym.Kind = core.KindVariable
@@ -168,6 +153,9 @@ func parse(language *sitter.Language, query, path string, src []byte) ([]*core.S
 		}
 		it.node, it.sym = defNode, sym
 		items = append(items, &it)
+	})
+	if err != nil {
+		return nil, err
 	}
 	return assemble(root, items), nil
 }
@@ -177,8 +165,8 @@ func parse(language *sitter.Language, query, path string, src []byte) ([]*core.S
 // class_heritage; the bundled JS grammar puts a bare identifier there.
 func parseHeritage(sym *core.Symbol, h *sitter.Node, src []byte) {
 	putBase := func(v *sitter.Node) {
-		sym.SuperTypes = append(sym.SuperTypes, bareName(v.Content(src)))
-		sym.BasePos = append(sym.BasePos, core.Pos{Line: int(v.StartPoint().Row) + 1, Col: int(v.StartPoint().Column)})
+		sym.SuperTypes = append(sym.SuperTypes, bareName(tsutil.Content(v, src)))
+		sym.BasePos = append(sym.BasePos, tsutil.Pos(v))
 	}
 	for i := 0; i < int(h.NamedChildCount()); i++ {
 		clause := h.NamedChild(i)
@@ -190,8 +178,8 @@ func parseHeritage(sym *core.Symbol, h *sitter.Node, src []byte) {
 		case "implements_clause":
 			for j := 0; j < int(clause.NamedChildCount()); j++ {
 				t := clause.NamedChild(j)
-				sym.Implements = append(sym.Implements, bareName(t.Content(src)))
-				sym.ImplPos = append(sym.ImplPos, core.Pos{Line: int(t.StartPoint().Row) + 1, Col: int(t.StartPoint().Column)})
+				sym.Implements = append(sym.Implements, bareName(tsutil.Content(t, src)))
+				sym.ImplPos = append(sym.ImplPos, tsutil.Pos(t))
 			}
 		case "identifier", "member_expression": // JS: class_heritage (identifier)
 			putBase(clause)
@@ -211,20 +199,16 @@ func stripAnnotation(s string) string {
 	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), ":"))
 }
 
-func nodeKey(n *sitter.Node) string {
-	return fmt.Sprintf("%s:%d:%d", n.Type(), n.StartByte(), n.EndByte())
-}
-
 func assemble(root *sitter.Node, items []*item) []*core.Symbol {
 	byKey := map[string]*item{}
 	for _, it := range items {
-		byKey[nodeKey(it.node)] = it
+		byKey[tsutil.NodeKey(it.node)] = it
 	}
 	var top []*core.Symbol
 	for _, it := range items {
 		var parent *item
 		for p := it.node.Parent(); p != nil && p != root; p = p.Parent() {
-			if pi, ok := byKey[nodeKey(p)]; ok {
+			if pi, ok := byKey[tsutil.NodeKey(p)]; ok {
 				parent = pi
 				break
 			}
@@ -247,8 +231,4 @@ func assemble(root *sitter.Node, items []*item) []*core.Symbol {
 		}
 	}
 	return top
-}
-
-func compactWS(s string) string {
-	return strings.Join(strings.Fields(s), " ")
 }
