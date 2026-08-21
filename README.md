@@ -46,7 +46,7 @@ myproject/
 - `ct -f json .` —— 结构化 JSON（含 kind、file:line、docstring、supertypes、fields），供脚本消费
 - `ct -f mermaid .` —— 合法 Mermaid `classDiagram`，含继承边 `Animal <|-- Dog`
 - `ct -f diagram .` —— 终端内字符画布 UML 类继承图（自研 tidy-tree 布局，无第三方布局库）
-- `ct -lsp -f diagram .` —— 先跑 LSP 语义修正（Python），stderr 打印修正 diff，再渲染修正后的模型
+- `ct -lsp -f diagram .` —— 先跑 LSP 语义修正（按项目语言逐个起 server），stderr 打印修正 diff，再渲染修正后的模型
 
 ### 类图（-f diagram）
 
@@ -154,7 +154,7 @@ langs/golang/      标准库 go/ast 实现 —— 证明可插拔且不增加 cg
 render/text/       缩进树（│ ├─ └─ 引导线）
 render/json/       结构化 JSON
 render/mermaid/    Mermaid classDiagram（含继承边）
-lsp/               可选 LSP 语义层（Python）：go.lsp.dev/protocol 客户端 +
+lsp/               可选 LSP 语义层（多语言）：go.lsp.dev/protocol 客户端 +
                    server 探测（TOML 配置，可插拔）+ 事实修正/增补（resolver）
 diagram/           字符画布 UML 类图：建继承森林 → Buchheim tidy-tree 布局（字符格）
                    → 方向位掩码 elbow 布线 → 卡片渲染；纯函数，不依赖 TUI
@@ -169,21 +169,26 @@ tui/               bubbletea 浏览器（薄壳，只消费 core.Project / diagr
 ## 当前支持
 
 - **Python**：class（含文本级基类列表）、模块级函数、类内方法、嵌套类/嵌套函数、`async def` 标注、装饰器摘要（`@property` 等）、docstring 首段、变量/常量（`-a`）、类属性 + `__init__` 内 `self.x` 实例属性（类型从注解或值推断）；`Protocol/ABC` → interface、`Enum` → enum
-- **Go**：`type struct` / `type interface`、函数、方法（按接收者归到对应 type 下；跨文件接收者以 `(T)` 标注）、常量/变量（`-a`）、doc 注释首段、struct 字段（嵌入字段标记）
+- **Go**：`type struct` / `type interface`、函数、方法（按接收者归到对应 type 下；跨文件接收者以 `(T)` 标注）、常量/变量（`-a`）、doc 注释首段、struct 字段（嵌入字段进 SuperTypes 出继承边；LSP 下 interface 实现关系出虚线边）
 - **Java**：class / interface（含 `extends` 链）/ enum / record、构造器（`new` 标注）、`@Override` 等注解摘要、字段（含类型）、嵌套类归层；**extends → 实线继承边，implements → 绿色虚线边**
 - **C++**（.cc/.cpp/.cxx/.h/.hpp/.hxx）：class / struct / enum（含 `enum class`）、`base_class_clause` 多基类（忽略访问修饰符，模板基类 `B<T>` 取 `B`）、构造/析构、类内方法声明+定义、namespace 内类型、模板类（名字不带模板参数）、类外定义 `void Dog::bark()` 按限定名归并
+- **Rust**（.rs）：struct / enum / trait（→ interface）、impl 块方法归并到类型、`impl Trait for Type` → Implements 虚线边、字段（含类型）
+- **TypeScript/JavaScript**（.ts/.tsx/.js/.jsx）：class（extends → 继承边；TS implements → 虚线边）、interface / enum、方法、TS 字段（含类型）；JS 侧无字段（grammar 限制）
 
 类图边语义：实线 `▲` = 继承（extends），绿色虚线 `┆/┄` = 实现（implements），灰色 = 外部基类。无法解析的 implements 接口降级为卡片标题 `~Iface` 标注。
 
-## LSP 语义层（可选，当前支持 Python）
+## LSP 语义层（可选）
 
 静态扫描打底、LSP 修正与增补：TUI 永远先用静态结果秒开；PATH 里探测到 server 就异步热身，就绪后自动刷新视图；没装 server 就安静保持纯静态，零报错零卡顿。状态栏右侧显示 `lsp warming… / ready / failed`。
 
-修正三类事实：
+默认 server 探测表：python → basedpyright/pyright；go → gopls；cpp → clangd；java → jdtls；rust → rust-analyzer；typescript/javascript → typescript-language-server（`--stdio`，需要 workspace 里有 typescript@5 依赖）。
+
+修正四类事实：
 
 - **基类消歧**：`definition` 打在基类 token 上，extends 边绑定到精确符号——两个文件各有同名 `Base` 时不再接错边（同名类现在都作为独立节点出现）
 - **字段类型**：`hover` 补全静态推断不出的字段类型（如 `self.x = Dog()` 无注解场景），组合 ◆ 边更全
 - **类增补**：`documentSymbol` 捞回静态漏掉的动态类（`Color = Enum('Color', ...)`、`namedtuple` 等），带 `lsp` 来源标记
+- **接口实现（Go）**：`implementation` 打在 interface 上，实现者写回 `Implements`——Go 项目因此出现虚线 implements 边
 
 server 可插拔、不捆绑，配置文件 `~/.config/codetree/config.toml`：
 
@@ -194,13 +199,12 @@ args = ["--stdio"]
 # enabled = false                     # 关掉这一层
 ```
 
-不配文件时按默认表探测（basedpyright → pyright）。CLI 侧用 `ct -lsp` 跑修正并打印 diff。
+配置段按语言分 key：`[lsp.python]`、`[lsp.go]`、`[lsp.cpp]`、`[lsp.java]`、`[lsp.rust]`、`[lsp.typescript]`、`[lsp.javascript]`。CLI 侧用 `ct -lsp` 跑修正并打印 diff。
 
 ## 路线图
 
-- LSP 层铺开更多语言（gopls / clangd / jdtls），复用现有 client 与 resolver
 - type hierarchy / call hierarchy 更深的关系数据
-- 更多语言（rust/typescript），复用 tree-sitter 通道
+- java 的 jdtls 路径本轮只有 fake-server 测试，未做真实 e2e
 
 ## 开发
 
