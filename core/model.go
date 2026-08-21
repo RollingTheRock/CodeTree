@@ -61,6 +61,24 @@ type Field struct {
 	Type     string `json:"type,omitempty"`     // from annotation or value inference; may be empty
 	ClassVar bool   `json:"classvar,omitempty"` // Python: class-body attribute vs self.x instance attribute
 	Embedded bool   `json:"embedded,omitempty"` // Go: embedded struct field
+
+	// Line/Col locate the field name token (Line 1-based, Col 0-based).
+	// LSP hover needs them; 0/0 = unknown.
+	Line int `json:"line,omitempty"`
+	Col  int `json:"col,omitempty"`
+}
+
+// Pos is a source position: Line 1-based, Col 0-based.
+type Pos struct {
+	Line int `json:"line"`
+	Col  int `json:"col"`
+}
+
+// Ref points at a definition site (file + 1-based line). Filled by the LSP
+// layer to bind a base-class mention to a precise symbol.
+type Ref struct {
+	File string `json:"file"`
+	Line int    `json:"line"`
 }
 
 // Symbol is a node in the code structure map.
@@ -79,10 +97,23 @@ type Symbol struct {
 	// v2 will fill precise resolved types from LSP.
 	SuperTypes []string `json:"supertypes,omitempty"`
 
+	// BasePos holds the source position of each SuperTypes token (parallel
+	// slice; LSP definition requests are issued at these positions).
+	BasePos []Pos `json:"basepos,omitempty"`
+
+	// BaseRefs is the LSP-resolved binding for each SuperTypes entry
+	// (parallel slice; zero Ref = unresolved → diagram falls back to
+	// name matching).
+	BaseRefs []Ref `json:"baserefs,omitempty"`
+
 	// Implements lists interfaces this type implements (Java/C#-style).
 	// Distinct from SuperTypes so diagrams can render dashed implements
 	// edges vs solid extends edges. Empty for Python/Go (v2 LSP may fill).
 	Implements []string `json:"implements,omitempty"`
+
+	// Source marks where this symbol came from: "" or "static" = static
+	// analysis, "lsp" = added by the language server.
+	Source string `json:"source,omitempty"`
 }
 
 // Label renders one symbol line: "Dog(Animal) (class)", "speak(self)",

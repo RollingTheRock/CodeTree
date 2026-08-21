@@ -47,6 +47,7 @@ type item struct {
 	sym  *core.Symbol
 	typ  string // annotation text (var items only)
 	val  string // value-inferred type (var items only)
+	pos  core.Pos // name token position (var items only)
 }
 
 // attrItem is a self.x assignment captured for instance-field extraction.
@@ -56,6 +57,7 @@ type attrItem struct {
 	name string
 	typ  string
 	val  string
+	pos  core.Pos // attribute name token position
 }
 
 // Parse extracts the symbol tree of one Python source file.
@@ -105,6 +107,7 @@ func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symb
 				attr.obj = c.Node.Content(src)
 			case "attr.name":
 				attr.name = c.Node.Content(src)
+				attr.pos = core.Pos{Line: int(c.Node.StartPoint().Row) + 1, Col: int(c.Node.StartPoint().Column)}
 			}
 		}
 		if defNode == nil {
@@ -129,7 +132,11 @@ func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symb
 		}
 		sym := buildSymbol(defKind, defNode, nameNode, auxNode, src)
 		sym.File = path
-		items = append(items, &item{node: defNode, sym: sym, typ: typ, val: val})
+		it := &item{node: defNode, sym: sym, typ: typ, val: val}
+		if defKind == "var" {
+			it.pos = core.Pos{Line: int(nameNode.StartPoint().Row) + 1, Col: int(nameNode.StartPoint().Column)}
+		}
+		items = append(items, it)
 	}
 
 	return assemble(root, items, attrs, opts), nil
@@ -150,7 +157,7 @@ func buildSymbol(kind string, defNode, nameNode, auxNode *sitter.Node, src []byt
 		sym.Kind = core.KindClass
 		if auxNode != nil {
 			sym.Detail = compactWS(auxNode.Content(src)) // e.g. "(Animal, Mixin)"
-			sym.SuperTypes = baseNames(auxNode, src)
+			sym.SuperTypes, sym.BasePos = baseNames(auxNode, src)
 		}
 		sym.Kind = classifyClass(sym.SuperTypes)
 		sym.Doc = docstring(defNode, src)
@@ -216,6 +223,7 @@ func assemble(root *sitter.Node, items []*item, attrs []*attrItem, opts core.Par
 			// direct class-body assignment → class attribute
 			parent.sym.Fields = append(parent.sym.Fields, core.Field{
 				Name: it.sym.Name, Type: firstNonEmpty(it.typ, it.val), ClassVar: true,
+				Line: it.pos.Line, Col: it.pos.Col,
 			})
 		default: // nested function/class inside a function
 			parent.sym.Children = append(parent.sym.Children, it.sym)
@@ -242,6 +250,7 @@ func assemble(root *sitter.Node, items []*item, attrs []*attrItem, opts core.Par
 		if !dup {
 			owner.sym.Fields = append(owner.sym.Fields, core.Field{
 				Name: a.name, Type: firstNonEmpty(a.typ, a.val),
+				Line: a.pos.Line, Col: a.pos.Col,
 			})
 		}
 	}
@@ -374,17 +383,20 @@ func docstring(defNode *sitter.Node, src []byte) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
-// baseNames extracts text-level base class names from an argument_list node.
-func baseNames(args *sitter.Node, src []byte) []string {
+// baseNames extracts text-level base class names from an argument_list node,
+// with the source position of each base token (for LSP definition requests).
+func baseNames(args *sitter.Node, src []byte) ([]string, []core.Pos) {
 	var out []string
+	var pos []core.Pos
 	for i := 0; i < int(args.NamedChildCount()); i++ {
 		c := args.NamedChild(i)
 		if c.Type() == "keyword_argument" {
 			continue
 		}
 		out = append(out, c.Content(src))
+		pos = append(pos, core.Pos{Line: int(c.StartPoint().Row) + 1, Col: int(c.StartPoint().Column)})
 	}
-	return out
+	return out, pos
 }
 
 func compactWS(s string) string {
