@@ -46,6 +46,7 @@ func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symb
 					}
 					sym.File = path
 					sym.Line = line(sp.Pos())
+					sym.Col = fset.Position(sp.Name.Pos()).Column - 1
 					sym.Doc = firstPara(docText(sp.Doc, d.Doc))
 					top = append(top, sym)
 					types[sym.Name] = sym
@@ -103,6 +104,15 @@ func typeSymbol(sp *ast.TypeSpec, src []byte, fset *token.FileSet) *core.Symbol 
 	case *ast.StructType:
 		sym.Kind = core.KindStruct
 		sym.Fields = structFields(fset, t)
+		// embedded fields act as text-level bases (and get LSP anchors)
+		for _, f := range t.Fields.List {
+			if len(f.Names) != 0 {
+				continue
+			}
+			sym.SuperTypes = append(sym.SuperTypes, exprString(fset, f.Type))
+			pos := fset.Position(f.Type.Pos())
+			sym.BasePos = append(sym.BasePos, core.Pos{Line: pos.Line, Col: pos.Column - 1})
+		}
 	case *ast.InterfaceType:
 		sym.Kind = core.KindInterface
 	default:

@@ -105,14 +105,14 @@ func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symb
 		line := int(defNode.StartPoint().Row) + 1
 		switch defKind {
 		case "class", "struct":
-			sym := &core.Symbol{Name: nameNode.Content(src), Line: line, File: path}
+			sym := &core.Symbol{Name: nameNode.Content(src), Line: line, Col: int(nameNode.StartPoint().Column), File: path}
 			if defKind == "class" {
 				sym.Kind = core.KindClass
 			} else {
 				sym.Kind = core.KindStruct
 			}
 			if basesNode != nil {
-				sym.SuperTypes = baseNames(basesNode, src)
+				sym.SuperTypes, sym.BasePos = baseNames(basesNode, src)
 				if len(sym.SuperTypes) > 0 {
 					sym.Detail = "(" + strings.Join(sym.SuperTypes, ", ") + ")"
 				}
@@ -231,27 +231,37 @@ func assemble(root *sitter.Node, items []*item, opts core.ParseOptions) []*core.
 }
 
 // baseNames extracts base classes from base_class_clause, skipping access
-// specifiers and stripping template arguments (B<T> → B).
-func baseNames(clause *sitter.Node, src []byte) []string {
+// specifiers and stripping template arguments (B<T> → B), with the source
+// position of each base token.
+func baseNames(clause *sitter.Node, src []byte) ([]string, []core.Pos) {
 	var out []string
+	var pos []core.Pos
+	put := func(name string, n *sitter.Node) {
+		out = append(out, name)
+		pos = append(pos, core.Pos{Line: int(n.StartPoint().Row) + 1, Col: int(n.StartPoint().Column)})
+	}
 	for i := 0; i < int(clause.NamedChildCount()); i++ {
 		c := clause.NamedChild(i)
 		switch c.Type() {
 		case "type_identifier":
-			out = append(out, c.Content(src))
+			put(c.Content(src), c)
 		case "template_type":
 			if n := c.ChildByFieldName("name"); n != nil {
-				out = append(out, n.Content(src))
+				put(n.Content(src), n)
 			}
 		case "qualified_identifier", "scoped_identifier":
 			text := c.Content(src)
 			if i := strings.LastIndex(text, "::"); i >= 0 {
-				text = text[i+2:]
+				// position of the bare name after the last ::
+				col := int(c.StartPoint().Column) + i + 2
+				out = append(out, text[i+2:])
+				pos = append(pos, core.Pos{Line: int(c.StartPoint().Row) + 1, Col: col})
+			} else {
+				put(text, c)
 			}
-			out = append(out, text)
 		}
 	}
-	return out
+	return out, pos
 }
 
 func compactWS(s string) string {

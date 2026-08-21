@@ -45,8 +45,8 @@ func init() { langs.Register(lang{}) }
 type item struct {
 	node *sitter.Node
 	sym  *core.Symbol
-	typ  string // annotation text (var items only)
-	val  string // value-inferred type (var items only)
+	typ  string   // annotation text (var items only)
+	val  string   // value-inferred type (var items only)
 	pos  core.Pos // name token position (var items only)
 }
 
@@ -151,6 +151,7 @@ func buildSymbol(kind string, defNode, nameNode, auxNode *sitter.Node, src []byt
 	sym := &core.Symbol{
 		Name: nameNode.Content(src),
 		Line: int(defNode.StartPoint().Row) + 1,
+		Col:  int(nameNode.StartPoint().Column),
 	}
 	switch kind {
 	case "class":

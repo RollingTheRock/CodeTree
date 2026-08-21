@@ -125,22 +125,23 @@ func (lang) Parse(path string, src []byte, opts core.ParseOptions) ([]*core.Symb
 		sym := &core.Symbol{
 			Name: nameNode.Content(src),
 			Line: int(defNode.StartPoint().Row) + 1,
+			Col:  int(nameNode.StartPoint().Column),
 			File: path,
 		}
 		switch defKind {
 		case "class":
 			sym.Kind = core.KindClass
 			if superNode != nil {
-				sym.SuperTypes = typeNames(superNode, src)
+				sym.SuperTypes, sym.BasePos = typeNamesPos(superNode, src)
 				sym.Detail = "(" + strings.Join(sym.SuperTypes, ", ") + ")"
 			}
 			if ifacesNode != nil {
-				sym.Implements = typeNames(ifacesNode, src)
+				sym.Implements, sym.ImplPos = typeNamesPos(ifacesNode, src)
 			}
 		case "iface":
 			sym.Kind = core.KindInterface
 			if ifacesNode != nil { // interface extends interface → inheritance
-				sym.SuperTypes = typeNames(ifacesNode, src)
+				sym.SuperTypes, sym.BasePos = typeNamesPos(ifacesNode, src)
 				sym.Detail = "(" + strings.Join(sym.SuperTypes, ", ") + ")"
 			}
 		case "enum":
@@ -216,20 +217,24 @@ func assemble(root *sitter.Node, items []*item, opts core.ParseOptions) []*core.
 	return top
 }
 
-// typeNames extracts type names from superclass / super_interfaces /
-// extends_interfaces nodes, stripping generics (Comparable<Dog> → Comparable).
-func typeNames(n *sitter.Node, src []byte) []string {
+// typeNamesPos extracts type names from superclass / super_interfaces /
+// extends_interfaces nodes, stripping generics (Comparable<Dog> →
+// Comparable), with the source position of each type token.
+func typeNamesPos(n *sitter.Node, src []byte) ([]string, []core.Pos) {
 	var out []string
+	var pos []core.Pos
 	var walk func(n *sitter.Node)
 	walk = func(n *sitter.Node) {
 		switch n.Type() {
 		case "type_identifier":
 			out = append(out, n.Content(src))
+			pos = append(pos, nodePos(n))
 			return
 		case "generic_type", "scoped_type_identifier":
 			// take the outermost name only
-			if name := firstTypeIdentifier(n, src); name != "" {
-				out = append(out, name)
+			if ti := firstTypeIdentifierNode(n); ti != nil {
+				out = append(out, ti.Content(src))
+				pos = append(pos, nodePos(ti))
 			}
 			return
 		}
@@ -238,17 +243,28 @@ func typeNames(n *sitter.Node, src []byte) []string {
 		}
 	}
 	walk(n)
-	return out
+	return out, pos
+}
+
+func nodePos(n *sitter.Node) core.Pos {
+	return core.Pos{Line: int(n.StartPoint().Row) + 1, Col: int(n.StartPoint().Column)}
+}
+
+func firstTypeIdentifierNode(n *sitter.Node) *sitter.Node {
+	if n.Type() == "type_identifier" {
+		return n
+	}
+	for i := 0; i < int(n.NamedChildCount()); i++ {
+		if s := firstTypeIdentifierNode(n.NamedChild(i)); s != nil {
+			return s
+		}
+	}
+	return nil
 }
 
 func firstTypeIdentifier(n *sitter.Node, src []byte) string {
-	if n.Type() == "type_identifier" {
-		return n.Content(src)
-	}
-	for i := 0; i < int(n.NamedChildCount()); i++ {
-		if s := firstTypeIdentifier(n.NamedChild(i), src); s != "" {
-			return s
-		}
+	if ti := firstTypeIdentifierNode(n); ti != nil {
+		return ti.Content(src)
 	}
 	return ""
 }

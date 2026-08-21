@@ -90,6 +90,7 @@ type Symbol struct {
 	Doc      string    `json:"doc,omitempty"`    // first paragraph of docstring / doc comment
 	File     string    `json:"file"`             // path relative to project root
 	Line     int       `json:"line"`             // 1-based
+	Col      int       `json:"col,omitempty"`    // 0-based column of the name token (LSP anchor)
 	Children []*Symbol `json:"children,omitempty"`
 	Fields   []Field   `json:"fields,omitempty"` // class/struct member variables
 
@@ -110,6 +111,10 @@ type Symbol struct {
 	// Distinct from SuperTypes so diagrams can render dashed implements
 	// edges vs solid extends edges. Empty for Python/Go (v2 LSP may fill).
 	Implements []string `json:"implements,omitempty"`
+
+	// ImplPos holds the source position of each Implements token (parallel
+	// slice), like BasePos for SuperTypes.
+	ImplPos []Pos `json:"implpos,omitempty"`
 
 	// Source marks where this symbol came from: "" or "static" = static
 	// analysis, "lsp" = added by the language server.
