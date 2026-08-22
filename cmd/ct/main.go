@@ -130,6 +130,7 @@ func main() {
 
 	// LSP semantic pass (opt-in for CLI): corrections printed as a diff.
 	if useLSP {
+		lsp.MinFilesPerLang = 1 // explicit flag: warm even tiny projects
 		abs, _ := filepath.Abs(path)
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()

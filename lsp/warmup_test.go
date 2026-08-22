@@ -35,7 +35,9 @@ func TestWarmEndToEnd(t *testing.T) {
 	baseURI := uri.File(root + "/models/base.py")
 	// swap in the fake
 	oldResolve, oldStarter := resolveServerFn, starter
-	defer func() { resolveServerFn, starter = oldResolve, oldStarter }()
+	oldMin := MinFilesPerLang
+	defer func() { resolveServerFn, starter, MinFilesPerLang = oldResolve, oldStarter, oldMin }()
+	MinFilesPerLang = 0 // two-file fixture project
 	resolveServerFn = func(lang string) (ServerConfig, bool) { return ServerConfig{Command: "fake"}, true }
 	starter = func(ctx context.Context, cfg ServerConfig, r, langKey string) (*Client, error) {
 		stream := fakeServer(t, func(method string, params jsonrpc2.RawMessage) any {
@@ -161,7 +163,9 @@ func TestCollectMultiLang(t *testing.T) {
 
 	goURI := uri.File(root + "/s.go")
 	oldResolve, oldStarter := resolveServerFn, starter
-	defer func() { resolveServerFn, starter = oldResolve, oldStarter }()
+	oldMin := MinFilesPerLang
+	defer func() { resolveServerFn, starter, MinFilesPerLang = oldResolve, oldStarter, oldMin }()
+	MinFilesPerLang = 0 // single-file-per-language fixture project
 	resolveServerFn = func(lang string) (ServerConfig, bool) { return ServerConfig{Command: "fake-" + lang}, true }
 	starter = func(ctx context.Context, cfg ServerConfig, r, langKey string) (*Client, error) {
 		stream := fakeServer(t, func(method string, params jsonrpc2.RawMessage) any {
@@ -209,5 +213,27 @@ func TestCollectAbsentWhenNoServer(t *testing.T) {
 	out, _ := Collect(context.Background(), t.TempDir(), proj)
 	if out.Status != StatusAbsent {
 		t.Errorf("status = %v", out.Status)
+	}
+}
+
+// TestCollectSkipsStrayLanguages: languages below MinFilesPerLang (fixtures,
+// vendored snippets) never get a server started.
+func TestCollectSkipsStrayLanguages(t *testing.T) {
+	oldResolve, oldMin := resolveServerFn, MinFilesPerLang
+	defer func() { resolveServerFn, MinFilesPerLang = oldResolve, oldMin }()
+	MinFilesPerLang = 3
+	var resolved []string
+	resolveServerFn = func(lang string) (ServerConfig, bool) {
+		resolved = append(resolved, lang)
+		return ServerConfig{}, false
+	}
+	proj := &core.Project{Root: "/p", Files: []*core.File{
+		{Path: "a.go", Lang: "go"}, {Path: "b.go", Lang: "go"}, {Path: "c.go", Lang: "go"},
+		{Path: "testdata/fixture.py", Lang: "python"},
+		{Path: "testdata/fixture.java", Lang: "java"},
+	}}
+	Collect(context.Background(), t.TempDir(), proj)
+	if len(resolved) != 1 || resolved[0] != "go" {
+		t.Errorf("servers probed = %v, want [go] only", resolved)
 	}
 }

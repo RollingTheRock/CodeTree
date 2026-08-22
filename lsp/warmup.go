@@ -21,6 +21,7 @@ const (
 	StatusWarming               // server starting / requests in flight
 	StatusReady                 // corrections applied
 	StatusFailed                // server found but handshake/run failed
+	StatusStale                 // corrections were applied, then files changed
 )
 
 func (s Status) String() string {
@@ -31,6 +32,8 @@ func (s Status) String() string {
 		return "ready"
 	case StatusFailed:
 		return "failed"
+	case StatusStale:
+		return "stale"
 	default:
 		return "absent"
 	}
@@ -48,6 +51,12 @@ type Outcome struct {
 
 // maxFilesPerPass caps per-language file work so huge projects stay snappy.
 const maxFilesPerPass = 200
+
+// MinFilesPerLang is the minimum number of files a language must have in the
+// project before a server is started for it. It keeps stray files (fixtures,
+// vendored snippets) from fanning out to servers for languages the project
+// isn't really written in. The CLI lowers this for the explicit --lsp flag.
+var MinFilesPerLang = 5
 
 // langOrder is the deterministic processing order for Collect.
 var langOrder = []string{"python", "go", "cpp", "java", "rust", "typescript", "javascript"}
@@ -88,6 +97,11 @@ func Collect(ctx context.Context, root string, proj *core.Project) (Outcome, Cor
 	anyFound := false
 	for _, lang := range langOrder {
 		if !present[lang] {
+			continue
+		}
+		// skip stray-file languages (test fixtures etc.): starting a server
+		// costs seconds of CPU and gains nothing for them
+		if len(filesOfLang(proj, lang)) < MinFilesPerLang {
 			continue
 		}
 		cfg, ok := resolveServerFn(lang)
