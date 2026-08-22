@@ -52,6 +52,37 @@ type Diagram struct {
 	Height int
 	Nodes  []PlacedNode // box placements, for TUI hit-testing/navigation
 	Focus  string       // resolved focus name, if any
+
+	// canvas and opts are retained so SetHighlight can repaint the selection
+	// without recomputing graph/layout. Nil for the empty "(no classes)"
+	// diagram.
+	canvas *canvas
+	opts   Options
+}
+
+// SetHighlight re-renders the diagram with a different highlighted class.
+// Highlight is style-only (layout and node set are identical either way), so
+// this restyles the old/new boxes on the retained canvas and re-emits the
+// text — no rebuild needed.
+func (d *Diagram) SetHighlight(name string) {
+	if d.canvas == nil {
+		return
+	}
+	if d.opts.Highlight == name {
+		return
+	}
+	for _, b := range d.canvas.allBoxes {
+		if b.ln.g.name == d.opts.Highlight {
+			d.canvas.restyleBox(b, false)
+		}
+	}
+	for _, b := range d.canvas.allBoxes {
+		if b.ln.g.name == name {
+			d.canvas.restyleBox(b, true)
+		}
+	}
+	d.opts.Highlight = name
+	d.Text = d.canvas.render(d.opts)
 }
 
 // PlacedNode is one rendered box's position.
@@ -189,6 +220,8 @@ func Build(p *core.Project, opts Options) (*Diagram, error) {
 
 	d.Width = c.width
 	d.Height = c.height
+	d.canvas = c
+	d.opts = opts
 	d.Text = c.render(opts)
 
 	// sort boxes by (Y, X), then wire layout-skeleton relations as indexes

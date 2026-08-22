@@ -98,6 +98,7 @@ type cell struct {
 	dir      int  // edge direction mask (when ch == 0)
 	dash     bool // edge is dashed (implements)
 	occupied bool // reserved by a box: edges must not cross
+	border   bool // part of a box border/separator: restyled on highlight
 }
 
 type canvas struct {
@@ -135,6 +136,16 @@ func (c *canvas) set(x, y int, ch rune, sty style) {
 		return
 	}
 	c.cells[y][x] = cell{ch: ch, sty: sty, occupied: true}
+}
+
+// setBorder is set for box border/separator cells: it additionally marks the
+// cell so restyleBox can restyle exactly the cells drawBox styled with
+// borderSty.
+func (c *canvas) setBorder(x, y int, ch rune, sty style) {
+	if x < 0 || y < 0 || x >= c.width || y >= c.height {
+		return
+	}
+	c.cells[y][x] = cell{ch: ch, sty: sty, occupied: true, border: true}
 }
 
 func (c *canvas) writeString(x, y int, s string, sty style) {
@@ -468,6 +479,48 @@ func cardSize(g *gnode, opts Options) (w, h int) {
 	return w, h
 }
 
+// ---- highlight restyling ----------------------------------------------------
+
+// baseStyles returns the box's border and title-text styles without
+// highlight, mirroring drawBox/cardContent.
+func baseStyles(g *gnode) (border, title style) {
+	switch {
+	case g.external:
+		return stExtern, stExtern
+	case g.context:
+		return stDim, stContext
+	default:
+		return stBorder, stTitle
+	}
+}
+
+// restyleBox flips the highlight on a drawn box in place: border and
+// separator cells (marked at draw time) plus title-row text cells. Runes and
+// layout are untouched.
+func (c *canvas) restyleBox(b *box, on bool) {
+	border, title := baseStyles(b.ln.g)
+	for y := b.y; y < b.y+b.h && y < c.height; y++ {
+		for x := b.x; x < b.x+b.w && x < c.width; x++ {
+			ce := &c.cells[y][x]
+			if on {
+				switch {
+				case ce.border && ce.sty == border:
+					ce.sty = stHighlight
+				case y == b.y+1 && !ce.border && ce.sty == title:
+					ce.sty = stHighlight
+				}
+			} else {
+				switch {
+				case ce.border && ce.sty == stHighlight:
+					ce.sty = border
+				case y == b.y+1 && !ce.border && ce.sty == stHighlight:
+					ce.sty = title
+				}
+			}
+		}
+	}
+}
+
 // drawBox renders one card onto the canvas:
 //
 //	┌────────────────────┐
@@ -494,23 +547,23 @@ func (c *canvas) drawBox(b *box, opts Options) {
 
 	x, y := b.x, b.y
 	// plain top border (arrowhead lands at its midpoint)
-	c.set(x, y, '┌', borderSty)
+	c.setBorder(x, y, '┌', borderSty)
 	for i := x + 1; i < x+b.w-1; i++ {
-		c.set(i, y, '─', borderSty)
+		c.setBorder(i, y, '─', borderSty)
 	}
-	c.set(x+b.w-1, y, '┐', borderSty)
+	c.setBorder(x+b.w-1, y, '┐', borderSty)
 
 	// bottom border
 	by := b.y + b.h - 1
-	c.set(x, by, '└', borderSty)
+	c.setBorder(x, by, '└', borderSty)
 	for i := x + 1; i < x+b.w-1; i++ {
-		c.set(i, by, '─', borderSty)
+		c.setBorder(i, by, '─', borderSty)
 	}
-	c.set(x+b.w-1, by, '┘', borderSty)
+	c.setBorder(x+b.w-1, by, '┘', borderSty)
 
 	row := y + 1
 	writeRow := func(segs []segment, center bool) {
-		c.set(x, row, '│', borderSty)
+		c.setBorder(x, row, '│', borderSty)
 		tx := x + 2
 		if center {
 			tx = x + (b.w-segmentsWidth(segs))/2
@@ -525,7 +578,7 @@ func (c *canvas) drawBox(b *box, opts Options) {
 			c.writeString(tx, row, s.text, sty)
 			tx += len([]rune(s.text))
 		}
-		c.set(x+b.w-1, row, '│', borderSty)
+		c.setBorder(x+b.w-1, row, '│', borderSty)
 		row++
 	}
 	writeRow(title, true)
@@ -533,11 +586,11 @@ func (c *canvas) drawBox(b *box, opts Options) {
 		writeRow(f, false)
 	}
 	if len(fields) > 0 && len(methods) > 0 {
-		c.set(x, row, '├', borderSty)
+		c.setBorder(x, row, '├', borderSty)
 		for i := x + 1; i < x+b.w-1; i++ {
-			c.set(i, row, '─', borderSty)
+			c.setBorder(i, row, '─', borderSty)
 		}
-		c.set(x+b.w-1, row, '┤', borderSty)
+		c.setBorder(x+b.w-1, row, '┤', borderSty)
 		row++
 	}
 	for _, m := range methods {
