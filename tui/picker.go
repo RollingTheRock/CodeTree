@@ -16,6 +16,12 @@ import (
 type fileEntry struct {
 	path       string // relative to project root
 	classCount int    // classes/interfaces/structs/enums defined inside
+
+	// render caches, filled once by pickerEntries
+	styled   string // path with file style
+	styledBG string // path with file style + cursor-row background
+	count    string // "(N)"
+	plainW   int    // display width of the row content (no cursor prefix)
 }
 
 // pickerEntries lists project source files with their class counts
@@ -30,7 +36,12 @@ func pickerEntries(p *core.Project) []fileEntry {
 				n++
 			}
 		}
-		out = append(out, fileEntry{path: f.Path, classCount: n})
+		fe := fileEntry{path: f.Path, classCount: n}
+		fe.styled = styleFile.Render(f.Path)
+		fe.styledBG = styleFile.Background(pickerRowBG).Render(f.Path)
+		fe.count = fmt.Sprintf("(%d)", n)
+		fe.plainW = 3 + 1 + lipgloss.Width(f.Path) + 1 + len(fe.count) // mark + path + count
+		out = append(out, fe)
 	}
 	return out
 }
@@ -81,6 +92,7 @@ func (m model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else {
 					m.marked[p] = true
 				}
+				m.cc.dirty = true // mark box + header count changed
 				if m.pCursor < len(vis)-1 {
 					m.pCursor++
 				}
@@ -95,6 +107,7 @@ func (m model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.filter, cmd = m.filter.Update(msg)
 			m.pCursor = 0
+			m.cc.dirty = true // visible set changed with the query
 			return m, cmd
 		}
 	}
@@ -121,6 +134,7 @@ func (m model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.marked[p] = true
 			}
+			m.cc.dirty = true
 		}
 		return m, nil
 	case "?":
@@ -161,46 +175,75 @@ func (m model) pickerConfirm(vis []fileEntry) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// pickerContent renders the file picker list.
-func (m *model) pickerContent() string {
-	var b strings.Builder
-	b.WriteString(styleTitle.Render("Select files") +
-		styleDim.Render(fmt.Sprintf("  %d marked", len(m.marked))) + "\n\n")
-	vis := m.pickerVisible()
-	rowBG := lipgloss.Color("237") // cursor row highlight
-	for i, fe := range vis {
-		cursor := i == m.pCursor
-		mkStyle := styleDim
+// pickerRowBG is the cursor row's full-width highlight color.
+var pickerRowBG = lipgloss.Color("237")
+
+// mark box variants, rendered once (cursor row needs the background version).
+var (
+	markOff   = styleDim.Render("[ ]")
+	markOn    = lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Render("[x]")
+	markOffBG = styleDim.Background(pickerRowBG).Render("[ ]")
+	markOnBG  = lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Background(pickerRowBG).Render("[x]")
+)
+
+// pickerRow renders one picker row from cached parts. The cursor row costs a
+// few lipgloss renders (one row per cursor move); other rows are pure concat.
+func (m *model) pickerRow(fe *fileEntry, cursor bool) string {
+	if !cursor {
+		mark := markOff
 		if m.marked[fe.path] {
-			mkStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))
+			mark = markOn
 		}
-		pathStyle := styleFile
-		if cursor {
-			mkStyle = mkStyle.Background(rowBG)
-			pathStyle = pathStyle.Background(rowBG)
-		}
-		mark := mkStyle.Render("[x]")
-		if !m.marked[fe.path] {
-			mark = mkStyle.Render("[ ]")
-		}
-		count := fmt.Sprintf("(%d)", fe.classCount)
-		prefix := "  "
-		if cursor {
-			prefix = "▶ "
-		}
-		line := prefix + mark + " " + pathStyle.Render(fe.path) + " " + count
-		if cursor {
-			// full-row highlight: pad to viewport width on the row background
-			row := lipgloss.NewStyle().Background(rowBG)
-			line = row.Render(prefix) + mark + row.Render(" ") + pathStyle.Render(fe.path) + row.Render(" "+count)
-			if pad := m.treeVP.Width - lipgloss.Width(line); pad > 0 {
-				line += row.Render(strings.Repeat(" ", pad))
-			}
-		}
-		b.WriteString(line + "\n")
+		return "  " + mark + " " + fe.styled + " " + fe.count
 	}
-	if len(vis) == 0 {
-		b.WriteString(styleDim.Render("  (no matching files)") + "\n")
+	row := lipgloss.NewStyle().Background(pickerRowBG)
+	mark := markOffBG
+	if m.marked[fe.path] {
+		mark = markOnBG
 	}
-	return b.String()
+	// full-row highlight: pad to viewport width on the row background
+	line := row.Render("▶ ") + mark + row.Render(" ") + fe.styledBG + row.Render(" "+fe.count)
+	if pad := m.treeVP.Width - (2 + fe.plainW); pad > 0 {
+		line += row.Render(strings.Repeat(" ", pad))
+	}
+	return line
+}
+
+// syncPicker maintains the picker's line cache: full rebuild when dirty
+// (filter/mark/scope change), otherwise patches just the old/new cursor
+// rows, then re-joins. Called from View via the shared cache pointer.
+func (m *model) syncPicker() {
+	cc := m.cc
+	if cc.mode != modePicker {
+		cc.mode, cc.dirty = modePicker, true
+	}
+	vis := m.pickerVisible()
+	if cc.dirty || cc.visLen != len(vis) {
+		header := styleTitle.Render("Select files") +
+			styleDim.Render(fmt.Sprintf("  %d marked", len(m.marked)))
+		cc.lines = make([]string, 0, len(vis)+3)
+		cc.lines = append(cc.lines, header, "")
+		for i := range vis {
+			cc.lines = append(cc.lines, m.pickerRow(&vis[i], i == m.pCursor))
+		}
+		if len(vis) == 0 {
+			cc.lines = append(cc.lines, styleDim.Render("  (no matching files)"))
+		}
+		cc.dirty = false
+		cc.cursor = m.pCursor
+		cc.visLen = len(vis)
+	} else if cc.cursor != m.pCursor {
+		// patch old+new cursor rows (offset by the 2 header lines)
+		if cc.cursor >= 0 && cc.cursor < len(vis) {
+			cc.lines[cc.cursor+2] = m.pickerRow(&vis[cc.cursor], false)
+		}
+		if m.pCursor < len(vis) {
+			cc.lines[m.pCursor+2] = m.pickerRow(&vis[m.pCursor], true)
+		}
+		cc.cursor = m.pCursor
+	} else {
+		return // nothing changed: keep the joined content as-is
+	}
+	cc.content = strings.Join(cc.lines, "\n")
+	cc.gen++
 }

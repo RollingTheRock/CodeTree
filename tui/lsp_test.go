@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/RollingTheRock/CodeTree/core"
 	"github.com/RollingTheRock/CodeTree/lsp"
 )
@@ -59,6 +61,27 @@ func TestLSPMsgAbsentKeepsStatic(t *testing.T) {
 	}
 	if len(m.proj.AllSymbols()) != before {
 		t.Error("absent LSP must not mutate the project")
+	}
+}
+
+// After a reload the applied corrections are gone and the layer goes stale
+// instead of re-warming; L re-warms manually.
+func TestLSPStaleAfterReload(t *testing.T) {
+	m := newModel(lspTestProj())
+	mm, _ := m.Update(lspMsg{out: lsp.Outcome{Status: lsp.StatusReady}})
+	m = mm.(model)
+	if m.lspStat != lsp.StatusReady {
+		t.Fatalf("lspStat = %v, want ready", m.lspStat)
+	}
+	mm, _ = m.Update(reloadedMsg{})
+	m = mm.(model)
+	if m.lspStat != lsp.StatusStale {
+		t.Fatalf("lspStat after reload = %v, want stale", m.lspStat)
+	}
+	mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	m = mm.(model)
+	if m.lspStat != lsp.StatusWarming || cmd == nil {
+		t.Errorf("L should re-warm: stat=%v cmd=%v", m.lspStat, cmd)
 	}
 }
 

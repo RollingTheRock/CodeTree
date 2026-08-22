@@ -9,6 +9,7 @@ import (
 )
 
 func (m model) updateDiagram(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	rebuild := true
 	switch msg.String() {
 	case "q", "ctrl+c":
 		m.quitting = true
@@ -18,12 +19,16 @@ func (m model) updateDiagram(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "h", "left":
 		m.moveSel(-1, 0)
+		rebuild = false
 	case "l", "right":
 		m.moveSel(1, 0)
+		rebuild = false
 	case "k", "up":
 		m.moveSel(0, -1)
+		rebuild = false
 	case "j", "down":
 		m.moveSel(0, 1)
+		rebuild = false
 	case "enter": // neighborhood mode on the selected class
 		if m.sel != "" {
 			m.dopts.Focus = m.sel
@@ -57,9 +62,28 @@ func (m model) updateDiagram(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.openEditorAt(n.Sym.File, n.Sym.Line)
 		}
 		return m, nil
+	default:
+		return m, nil // unrecognized key: no state changed
 	}
-	m.rebuildDiagram()
+	if rebuild {
+		m.rebuildDiagram()
+	} else {
+		m.applySelection()
+	}
 	return m, nil
+}
+
+// applySelection repaints just the selection highlight — layout and node set
+// are unchanged, so no diagram rebuild is needed — and scrolls the selection
+// into view.
+func (m *model) applySelection() {
+	if m.diag == nil {
+		return
+	}
+	m.diag.SetHighlight(m.sel)
+	m.cc.content = m.centeredDiag()
+	m.cc.gen++
+	m.scrollToSel()
 }
 
 // rebuildDiagram re-renders the class diagram with current options and
@@ -110,7 +134,8 @@ func (m *model) rebuildDiagram() {
 		}
 	}
 	m.diag = d
-	m.treeVP.SetContent(m.diag.Text)
+	m.cc.content = m.centeredDiag()
+	m.cc.gen++
 	m.scrollToSel()
 }
 

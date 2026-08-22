@@ -32,7 +32,7 @@ type hint struct{ key, desc string }
 var (
 	pickerHints = []hint{
 		{"j/k", "move"}, {"space", "mark"}, {"enter", "open"},
-		{"/", "filter"}, {"t", "tree"}, {"?", "help"}, {"q", "quit"},
+		{"/", "filter"}, {"t", "tree"}, {"L", "lsp"}, {"?", "help"}, {"q", "quit"},
 	}
 	pickerFilterHints = []hint{
 		{"↑↓", "move"}, {"tab", "mark"}, {"enter", "open"}, {"esc", "done"},
@@ -40,16 +40,16 @@ var (
 	diagramHints = []hint{
 		{"hjkl", "select"}, {"enter", "focus"}, {"+/-", "depth"},
 		{"b", "siblings"}, {"m", "members"}, {"c", "assoc"}, {"A", "all"},
-		{"esc", "picker"}, {"t", "tree"}, {"?", "help"}, {"q", "quit"},
+		{"esc", "picker"}, {"t", "tree"}, {"L", "lsp"}, {"?", "help"}, {"q", "quit"},
 	}
 	focusHints = []hint{
 		{"hjkl", "select"}, {"esc", "unfocus"}, {"+/-", "depth"},
 		{"b", "siblings"}, {"m", "members"}, {"c", "assoc"}, {"A", "all"},
-		{"t", "tree"}, {"?", "help"}, {"q", "quit"},
+		{"t", "tree"}, {"L", "lsp"}, {"?", "help"}, {"q", "quit"},
 	}
 	treeHints = []hint{
 		{"j/k", "move"}, {"h/l", "fold"}, {"space", "toggle"},
-		{"/", "filter"}, {"t", "picker"}, {"?", "help"}, {"q", "quit"},
+		{"/", "filter"}, {"t", "picker"}, {"L", "lsp"}, {"?", "help"}, {"q", "quit"},
 	}
 )
 
@@ -118,6 +118,8 @@ func (m *model) statusBar() string {
 		right = stBarInfo.Render("lsp ready ") + right
 	case lsp.StatusFailed:
 		right = stDesc.Render("lsp failed ") + right
+	case lsp.StatusStale:
+		right = stDesc.Render("lsp stale ·L ") + right
 	}
 	left := badge + " " + renderHints(hints, m.width)
 

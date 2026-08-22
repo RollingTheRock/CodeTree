@@ -170,6 +170,13 @@ func parseFiles(paths []string, root string, lp LangProvider, opts ScanOptions) 
 	return files
 }
 
+// ScanFile re-parses one project-relative file — the incremental-reload
+// path. Returns nil when the file is unrecognized, unreadable, deleted, or
+// has no symbols.
+func ScanFile(root, rel string, lp LangProvider, opts ScanOptions) *File {
+	return scanFile(filepath.Join(root, filepath.FromSlash(rel)), root, lp, opts)
+}
+
 func scanFile(path, root string, lp LangProvider, opts ScanOptions) *File {
 	var parser LangParser
 	if opts.Lang != "" {

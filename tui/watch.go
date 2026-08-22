@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,10 @@ import (
 // debounceInterval merges editor save bursts (write+chmod+rename) into one
 // refresh.
 const debounceInterval = 300 * time.Millisecond
+
+// maxIncrementalFiles caps the per-burst change set; beyond it (branch
+// switches, mass codegen) the reload falls back to a full rescan.
+const maxIncrementalFiles = 200
 
 // isSourceFile reports whether rel names a file of a registered language.
 func isSourceFile(rel string, exts map[string]bool) bool {
@@ -62,15 +67,20 @@ func relevantEvent(root string, ev fsnotify.Event, exts map[string]bool, ign *ig
 	return isSourceFile(rel, exts)
 }
 
-// watcher watches a project tree and emits one signal per debounced burst.
+// watcher watches a project tree and emits one batch of changed
+// project-relative paths per debounced burst. A nil batch means "too many
+// changes — rescan everything".
 type watcher struct {
 	fs  *fsnotify.Watcher
-	out chan struct{}
+	out chan []string
 }
 
-// watchProject starts a recursive watcher. Returns nil channel on any
-// failure (inotify limits etc.) — the TUI then simply never auto-reloads.
-func watchProject(root string) chan struct{} {
+// watchProject starts a recursive watcher. The initial walk + per-directory
+// Add runs in the background — on macOS kqueue this costs one fd and one
+// open per directory, which would otherwise block the first frame. Returns
+// a nil channel when even watcher creation fails; if the walk fails the
+// channel is closed (the TUI then simply never auto-reloads).
+func watchProject(root string) chan []string {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil
@@ -81,48 +91,62 @@ func watchProject(root string) chan struct{} {
 			ign = gi
 		}
 	}
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() {
+	out := make(chan []string, 1)
+	go func() {
+		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() {
+				return nil
+			}
+			rel, _ := filepath.Rel(root, path)
+			if !watchableDir(rel, d.Name(), ign) {
+				return filepath.SkipDir
+			}
+			if err := w.Add(path); err != nil {
+				return err
+			}
 			return nil
+		})
+		if err != nil {
+			w.Close()
+			close(out)
+			return
 		}
-		rel, _ := filepath.Rel(root, path)
-		if !watchableDir(rel, d.Name(), ign) {
-			return filepath.SkipDir
-		}
-		if err := w.Add(path); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		w.Close()
-		return nil
-	}
-
-	wr := &watcher{fs: w, out: make(chan struct{}, 1)}
-	go wr.run(root, ign)
-	return wr.out
+		wr := &watcher{fs: w, out: out}
+		wr.run(root, ign)
+	}()
+	return out
 }
 
-// run is the event loop: filter, debounce, notify. Newly created
+// run is the event loop: filter, accumulate, debounce, notify. Newly created
 // directories are added to the watch set (rename-based saves included).
 func (w *watcher) run(root string, ign *ignore.GitIgnore) {
 	exts := langs.Extensions()
 	var timer *time.Timer
 	var timerC <-chan time.Time
+	changed := map[string]bool{}
 	notify := func() {
+		var batch []string
+		if len(changed) <= maxIncrementalFiles {
+			batch = make([]string, 0, len(changed))
+			for p := range changed {
+				batch = append(batch, p)
+			}
+			sort.Strings(batch)
+		} // else nil: too many changes, rescan everything
 		select {
-		case w.out <- struct{}{}:
+		case w.out <- batch:
 		default: // a notification is already pending
 		}
+		changed = map[string]bool{}
 	}
 	for {
 		select {
 		case ev, ok := <-w.fs.Events:
 			if !ok {
+				close(w.out)
 				return
 			}
 			// pick up newly created directories
@@ -137,6 +161,11 @@ func (w *watcher) run(root string, ign *ignore.GitIgnore) {
 			if !relevantEvent(root, ev, exts, ign) {
 				continue
 			}
+			rel, err := filepath.Rel(root, ev.Name)
+			if err != nil {
+				continue
+			}
+			changed[filepath.ToSlash(rel)] = true
 			// (re)start the debounce window
 			if timer != nil {
 				timer.Stop()

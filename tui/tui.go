@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,13 +39,32 @@ const (
 	modeTree
 )
 
+// contentCache holds the rendered line cache shared by the tree and picker
+// views. It lives behind a pointer so View (value receiver) can update it.
+// Frames only re-render what changed: a full rebuild on dirty, else just the
+// old/new cursor lines.
+type contentCache struct {
+	mode      viewMode // mode the cache was built for
+	dirty     bool     // full rebuild needed (structure/filter/resize/mode)
+	lines     []string // rendered lines (padding included for tree)
+	cursor    int      // cursor value the lines were rendered against
+	visLen    int      // picker: visible entry count at rebuild
+	pad       int      // tree: centering pad
+	padStr    string
+	content   string // joined lines, handed to the viewport
+	gen       int    // bumped whenever content changes
+	pushedGen int    // gen last pushed via SetContent (skips redundant re-splits)
+}
+
 type model struct {
 	root     *node
 	projRoot string
 	proj     *core.Project
 
-	rows   []*node // visible rows (flattened)
-	cursor int
+	rows     []*node // visible rows (flattened)
+	rowDepth []int   // per-row nesting depth, parallel to rows
+	cursor   int
+	cc       *contentCache
 
 	// class diagram view
 	mode   viewMode
@@ -60,7 +80,7 @@ type model struct {
 	pCursor     int
 
 	// live reload
-	watchCh    chan struct{} // nil = watching disabled (silent degrade)
+	watchCh    chan []string // nil = watching disabled (silent degrade)
 	lastReload time.Time
 	scanOpts   core.ScanOptions
 
@@ -107,6 +127,7 @@ func newModel(p *core.Project) model {
 		root: buildTree(p), projRoot: p.Root, proj: p, filter: ti, dopts: dopts,
 		mode: modePicker, pickerFiles: pickerEntries(p), marked: map[string]bool{},
 		lspStat: lsp.StatusWarming, // Init's warm pass decides the real status
+		cc:      &contentCache{dirty: true},
 	}
 	m.reflow()
 	return m
@@ -114,8 +135,11 @@ func newModel(p *core.Project) model {
 
 // ---- tea.Model ------------------------------------------------------------
 
-// reloadedMsg signals a debounced project file change.
-type reloadedMsg struct{}
+// reloadedMsg signals a debounced batch of changed files. Nil paths means
+// "too many changes — rescan everything".
+type reloadedMsg struct {
+	paths []string
+}
 
 // lspMsg carries one LSP pass's collected corrections to the main loop.
 type lspMsg struct {
@@ -124,13 +148,18 @@ type lspMsg struct {
 }
 
 // waitForChange blocks until the watcher fires; nil channel = never fires.
-func waitForChange(ch chan struct{}) tea.Cmd {
+// A closed channel (watcher setup failed in the background) yields a nil
+// message, which bubbletea drops — watching then silently stops.
+func waitForChange(ch chan []string) tea.Cmd {
 	if ch == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		<-ch
-		return reloadedMsg{}
+		paths, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return reloadedMsg{paths}
 	}
 }
 
@@ -149,19 +178,55 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(waitForChange(m.watchCh), warmLSP(m.projRoot, m.proj))
 }
 
-// reload rescans the project and rebuilds all views, preserving UI state:
-// marks (pruned of deleted files), scope, focus, selection, scroll offset.
-// A file that fails to parse mid-save is simply skipped by the scanner;
-// a total scan failure keeps the old project.
-func (m *model) reload() {
-	proj, err := core.Scan(m.projRoot, langs.Registry{}, m.scanOpts)
-	if err != nil || len(proj.Files) == 0 {
-		return
+// reload applies a debounced change batch and rebuilds all views, preserving
+// UI state: marks (pruned of deleted files), scope, focus, selection, scroll
+// offset. A nil batch (mass change) triggers a full rescan; otherwise only
+// the changed files are re-parsed. A file that fails to parse mid-save is
+// simply skipped; a total scan failure keeps the old project.
+func (m *model) reload(paths []string) {
+	if paths == nil {
+		proj, err := core.Scan(m.projRoot, langs.Registry{}, m.scanOpts)
+		if err != nil || len(proj.Files) == 0 {
+			return
+		}
+		m.proj = proj
+	} else {
+		m.applyChanged(paths)
 	}
-	m.proj = proj
+	m.rebuildViews()
+}
+
+// applyChanged re-parses just the changed files, keeping proj.Files sorted
+// by path. Deleted, unreadable, or symbol-free files drop out — exactly what
+// a full rescan would produce.
+func (m *model) applyChanged(paths []string) {
+	reg := langs.Registry{}
+	for _, rel := range paths {
+		f := core.ScanFile(m.projRoot, rel, reg, m.scanOpts)
+		i := sort.Search(len(m.proj.Files), func(i int) bool { return m.proj.Files[i].Path >= rel })
+		exists := i < len(m.proj.Files) && m.proj.Files[i].Path == rel
+		switch {
+		case f == nil && exists:
+			m.proj.Files = append(m.proj.Files[:i], m.proj.Files[i+1:]...)
+		case f == nil:
+			// not in the project, nothing to remove
+		case exists:
+			m.proj.Files[i] = f
+		default:
+			m.proj.Files = append(m.proj.Files, nil)
+			copy(m.proj.Files[i+1:], m.proj.Files[i:])
+			m.proj.Files[i] = f
+		}
+	}
+}
+
+// rebuildViews derives every view from m.proj after a reload.
+func (m *model) rebuildViews() {
+	proj := m.proj
 	m.root = buildTree(proj)
 	m.reflow()
 	m.pickerFiles = pickerEntries(proj)
+	m.cc.dirty = true // picker entries rebuilt
 
 	// prune marks and scope of vanished files
 	valid := map[string]bool{}
@@ -206,10 +271,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case reloadedMsg:
-		m.reload()
-		// rescan dropped the LSP corrections — warm again in the background
-		m.lspStat = lsp.StatusWarming
-		return m, tea.Batch(waitForChange(m.watchCh), warmLSP(m.projRoot, m.proj))
+		m.reload(msg.paths)
+		// the rescan dropped applied LSP corrections; servers are expensive
+		// to restart, so don't re-warm automatically — mark stale, the user
+		// refreshes manually with L
+		if m.lspStat == lsp.StatusReady {
+			m.lspStat = lsp.StatusStale
+		}
+		return m, waitForChange(m.watchCh)
 
 	case lspMsg:
 		m.lspStat = msg.out.Status
@@ -247,6 +316,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m = mm.(model)
 			}
 			return m, nil
+		}
+		// L refreshes the LSP pass manually in any non-filtering mode
+		if msg.String() == "L" && !m.filtering {
+			m.lspStat = lsp.StatusWarming
+			return m, warmLSP(m.projRoot, m.proj)
 		}
 		if m.mode == modePicker {
 			return m.updatePicker(msg)
@@ -393,7 +467,7 @@ func (m *model) layout() {
 		h = 3
 	}
 	m.treeVP = viewport.New(w, h)
-	m.treeVP.SetContent(m.centered(m.treeContent()))
+	m.cc.dirty = true // width affects the centering pad
 	m.syncScroll()
 }
 
@@ -423,6 +497,26 @@ func (m *model) centered(s string) string {
 	return strings.Join(lines, "\n")
 }
 
+// centeredDiag pads the diagram text for horizontal centering using the
+// known canvas width — no per-line width measurement.
+func (m *model) centeredDiag() string {
+	if m.diag == nil {
+		return ""
+	}
+	pad := (m.width - m.diag.Width) / 2
+	if pad <= 0 {
+		return m.diag.Text
+	}
+	padStr := strings.Repeat(" ", pad)
+	lines := strings.Split(m.diag.Text, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			lines[i] = padStr + line
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m model) View() string {
 	if m.quitting {
 		return ""
@@ -432,13 +526,21 @@ func (m model) View() string {
 	}
 	switch m.mode {
 	case modePicker:
-		m.treeVP.SetContent(m.pickerContent()) // full-row highlight, no centering
+		m.syncPicker() // full-row highlight, no centering
 	case modeDiagram:
-		if m.diag != nil {
-			m.treeVP.SetContent(m.centered(m.diag.Text))
+		if m.diag == nil {
+			break // no diagram yet: leave the viewport as-is
 		}
 	default:
-		m.treeVP.SetContent(m.centered(m.treeContent()))
+		m.syncTree()
+	}
+	if m.mode == modeDiagram && m.diag == nil {
+		// nothing to show
+	} else if m.cc.gen != m.cc.pushedGen {
+		// SetContent re-splits and re-measures every line — only pay for it
+		// when the content actually changed
+		m.treeVP.SetContent(m.cc.content)
+		m.cc.pushedGen = m.cc.gen
 	}
 
 	body := m.treeVP.View()

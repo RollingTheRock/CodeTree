@@ -19,10 +19,34 @@ type node struct {
 	expanded bool
 	isDir    bool
 	isFile   bool
+
+	// render caches, filled once at build time: the styled label (icon
+	// included for symbols) and its display width. Frames never re-style.
+	rendered string
+	plainW   int
+}
+
+// renderLabel fills the render caches according to the node kind.
+func (n *node) renderLabel() {
+	switch {
+	case n.isDir:
+		n.rendered = styleDir.Render(n.label)
+		n.plainW = lipgloss.Width(n.label)
+	case n.isFile:
+		n.rendered = styleFile.Render(n.label)
+		n.plainW = lipgloss.Width(n.label)
+	case n.sym != nil:
+		n.rendered = symIcon(n.sym.Kind) + " " + n.label
+		n.plainW = 2 + lipgloss.Width(n.label)
+	default:
+		n.rendered = n.label
+		n.plainW = lipgloss.Width(n.label)
+	}
 }
 
 func buildTree(p *core.Project) *node {
 	root := &node{label: filepath.Base(p.Root) + "/", expanded: true, isDir: true}
+	root.renderLabel()
 	dirs := map[string]*node{"": root}
 	for _, f := range p.Files {
 		parts := strings.Split(f.Path, "/")
@@ -33,12 +57,14 @@ func buildTree(p *core.Project) *node {
 			child, ok := dirs[acc]
 			if !ok {
 				child = &node{label: d + "/", expanded: true, isDir: true}
+				child.renderLabel()
 				dirs[acc] = child
 				parent.children = append(parent.children, child)
 			}
 			parent = child
 		}
 		fn := &node{label: parts[len(parts)-1], file: f.Path, expanded: true, isFile: true}
+		fn.renderLabel()
 		for _, s := range f.Symbols {
 			fn.children = append(fn.children, symNode(f.Path, s))
 		}
@@ -50,6 +76,7 @@ func buildTree(p *core.Project) *node {
 
 func symNode(file string, s *core.Symbol) *node {
 	n := &node{label: label(s), sym: s, file: file, line: s.Line, expanded: true}
+	n.renderLabel()
 	for _, c := range s.Children {
 		n.children = append(n.children, symNode(file, c))
 	}
@@ -80,13 +107,16 @@ func sortTree(n *node) {
 	}
 }
 
-// reflow recomputes the visible row list from expansion + filter state.
+// reflow recomputes the visible row list (and per-row depth) from expansion
+// + filter state. Any structural change marks the line cache dirty.
 func (m *model) reflow() {
 	query := strings.ToLower(strings.TrimSpace(m.filter.Value()))
 	m.rows = m.rows[:0]
-	var walk func(n *node, forceExpand bool)
-	walk = func(n *node, forceExpand bool) {
+	m.rowDepth = m.rowDepth[:0]
+	var walk func(n *node, depth int, forceExpand bool)
+	walk = func(n *node, depth int, forceExpand bool) {
 		m.rows = append(m.rows, n)
+		m.rowDepth = append(m.rowDepth, depth)
 		if !n.expanded && !forceExpand {
 			return
 		}
@@ -94,16 +124,17 @@ func (m *model) reflow() {
 			if query != "" && !visibleUnder(c, query) {
 				continue
 			}
-			walk(c, query != "")
+			walk(c, depth+1, query != "")
 		}
 	}
-	walk(m.root, false)
+	walk(m.root, 0, false)
 	if m.cursor >= len(m.rows) {
 		m.cursor = len(m.rows) - 1
 	}
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
+	m.cc.dirty = true
 }
 
 // visibleUnder reports whether n or any descendant matches the query.
@@ -166,38 +197,85 @@ func (m *model) toggle() {
 	}
 }
 
-// treeContent renders the visible rows with guide lines.
-func (m *model) treeContent() string {
-	var b strings.Builder
-	depths := m.rowDepths()
-	for i, n := range m.rows {
-		prefix := strings.Repeat("  ", max(depths[i]-1, 0))
-		marker := "  "
-		if len(n.children) > 0 {
-			if n.expanded {
-				marker = "▾ "
-			} else {
-				marker = "▸ "
+// ---- cached line rendering --------------------------------------------------
+
+// cursorOn/cursorOff are the fixed-width (2 cells) cursor prefixes.
+var (
+	cursorOn  = styleCursor.Render("▶ ")
+	cursorOff = "  "
+)
+
+// treeLine renders row i from cached parts: concatenation only, no lipgloss.
+func (m *model) treeLine(i int) string {
+	n := m.rows[i]
+	d := m.rowDepth[i] - 1
+	if d < 0 {
+		d = 0
+	}
+	marker := "  "
+	if len(n.children) > 0 {
+		if n.expanded {
+			marker = "▾ "
+		} else {
+			marker = "▸ "
+		}
+	}
+	cur := cursorOff
+	if i == m.cursor {
+		cur = cursorOn
+	}
+	return m.cc.padStr + cur + strings.Repeat("  ", d) + marker + n.rendered
+}
+
+// treeLineW computes the display width of row i from cached widths.
+func (m *model) treeLineW(i int) int {
+	d := m.rowDepth[i] - 1
+	if d < 0 {
+		d = 0
+	}
+	return 2 + 2*d + 2 + m.rows[i].plainW // cursor + indent + marker + label
+}
+
+// syncTree rebuilds the line cache when dirty, otherwise patches just the
+// old/new cursor lines, then re-joins the content string. Called from View
+// via the shared cache pointer.
+func (m *model) syncTree() {
+	cc := m.cc
+	if cc.mode != modeTree {
+		cc.mode, cc.dirty = modeTree, true
+	}
+	if cc.dirty || len(cc.lines) != len(m.rows) {
+		// full rebuild: compute the centering pad from cached widths
+		maxw := 0
+		for i := range m.rows {
+			if w := m.treeLineW(i); w > maxw {
+				maxw = w
 			}
 		}
-		label := n.label
-		switch {
-		case n.isDir:
-			label = styleDir.Render(label)
-		case n.isFile:
-			label = styleFile.Render(label)
-		case n.sym != nil:
-			label = symIcon(n.sym.Kind) + " " + label
+		cc.pad = (m.width - maxw) / 2
+		if cc.pad < 0 {
+			cc.pad = 0
 		}
-		line := prefix + marker + label
-		if i == m.cursor {
-			line = styleCursor.Render("▶ ") + line
-		} else {
-			line = "  " + line
+		cc.padStr = strings.Repeat(" ", cc.pad)
+		cc.lines = make([]string, len(m.rows))
+		for i := range m.rows {
+			cc.lines[i] = m.treeLine(i)
 		}
-		b.WriteString(line + "\n")
+		cc.dirty = false
+		cc.cursor = m.cursor
+	} else if cc.cursor != m.cursor {
+		if cc.cursor >= 0 && cc.cursor < len(cc.lines) {
+			cc.lines[cc.cursor] = m.treeLine(cc.cursor)
+		}
+		if m.cursor < len(cc.lines) {
+			cc.lines[m.cursor] = m.treeLine(m.cursor)
+		}
+		cc.cursor = m.cursor
+	} else {
+		return // nothing changed: keep the joined content as-is
 	}
-	return b.String()
+	cc.content = strings.Join(cc.lines, "\n")
+	cc.gen++
 }
 
 // symIcon returns the colored single-character kind icon used in the tree
@@ -221,19 +299,4 @@ func symIcon(k core.Kind) string {
 		return lipgloss.NewStyle().Foreground(is.color).Bold(k == core.KindClass).Render(is.icon)
 	}
 	return " "
-}
-
-// rowDepths computes nesting depth per visible row by tracking ancestry
-// through the flattened list.
-func (m *model) rowDepths() []int {
-	depths := make([]int, len(m.rows))
-	var stack []*node
-	for i, n := range m.rows {
-		for len(stack) > 0 && !containsNode(stack[len(stack)-1], n) && stack[len(stack)-1] != n {
-			stack = stack[:len(stack)-1]
-		}
-		depths[i] = len(stack)
-		stack = append(stack, n)
-	}
-	return depths
 }

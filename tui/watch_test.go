@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,7 +98,7 @@ func TestReloadPreservesState(t *testing.T) {
 	}
 	writeT(t, root, "a.py", "class A:\n    pass\n\nclass A2:\n    pass\n")
 
-	m.reload()
+	m.reload(nil)
 
 	if !m.marked["a.py"] {
 		t.Error("mark on a.py lost")
@@ -135,13 +136,66 @@ func TestReloadPrunesDeletedMarks(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "gone.py")); err != nil {
 		t.Fatal(err)
 	}
-	m.reload()
+	m.reload(nil)
 
 	if m.marked["gone.py"] {
 		t.Error("mark on deleted file should be pruned")
 	}
 	if !m.marked["a.py"] {
 		t.Error("mark on surviving file lost")
+	}
+}
+
+// Incremental reload must produce exactly the same project as a full rescan.
+func TestIncrementalReloadMatchesFullRescan(t *testing.T) {
+	root := t.TempDir()
+	writeT(t, root, "a.py", "class A:\n    pass\n")
+	writeT(t, root, "pkg/b.py", "class B:\n    pass\n")
+	writeT(t, root, "c.py", "class C:\n    pass\n")
+
+	proj, err := core.Scan(root, langs.Registry{}, core.ScanOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(proj)
+	m.projRoot = root
+
+	// change a.py, delete pkg/b.py, add d.py
+	writeT(t, root, "a.py", "class A:\n    pass\n\nclass A2:\n    pass\n")
+	if err := os.Remove(filepath.Join(root, "pkg", "b.py")); err != nil {
+		t.Fatal(err)
+	}
+	writeT(t, root, "d.py", "class D:\n    pass\n")
+
+	m.reload([]string{"a.py", "pkg/b.py", "d.py"})
+
+	full, err := core.Scan(root, langs.Registry{}, core.ScanOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.proj.Files) != len(full.Files) {
+		t.Fatalf("incremental %d files, full %d", len(m.proj.Files), len(full.Files))
+	}
+	for i, f := range full.Files {
+		got := m.proj.Files[i]
+		if got.Path != f.Path {
+			t.Fatalf("file %d: %q vs full %q", i, got.Path, f.Path)
+		}
+		var gotSyms, wantSyms []string
+		for _, s := range got.AllSymbols() {
+			gotSyms = append(gotSyms, s.Label())
+		}
+		for _, s := range f.AllSymbols() {
+			wantSyms = append(wantSyms, s.Label())
+		}
+		if strings.Join(gotSyms, ",") != strings.Join(wantSyms, ",") {
+			t.Errorf("%s: symbols %v vs full %v", f.Path, gotSyms, wantSyms)
+		}
+	}
+
+	// picker reflects the same file set
+	if len(m.pickerFiles) != len(full.Files) {
+		t.Errorf("picker files = %d, want %d", len(m.pickerFiles), len(full.Files))
 	}
 }
 
